@@ -1,0 +1,131 @@
+import uuid
+import re
+import asyncpg
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from app.modules.bi.models.query import Query
+from app.modules.bi.models.data_source import DataSource
+from app.modules.bi.queries.schemas import QueryCreate, QueryUpdate, QueryPreviewRequest, QueryPreviewResponse
+from app.modules.bi.data_sources.service import decrypt_password
+
+from app.modules.bi.data_sources.engines import get_engine
+
+async def validate_sql(sql_text: str):
+    # Expanded forbidden keywords to prevent DDL, DML, and various injection techniques
+    forbidden_keywords = [
+        'insert', 'update', 'delete', 'drop', 'alter', 'truncate', 
+        'create', 'grant', 'revoke', 'call', 'exec', 'merge',
+        'pg_sleep', 'pg_read_file', 'pg_ls_dir', 'copy'
+    ]
+    sql_lower = sql_text.lower().strip()
+    
+    # Remove trailing semicolon if it exists at the very end
+    if sql_lower.endswith(';'):
+        sql_lower = sql_lower[:-1].strip()
+        
+    # Check for internal semicolons which could indicate multiple statements
+    if ';' in sql_lower:
+        raise ValueError("Multiple SQL statements are not allowed. Semicolons are only permitted at the end of the query.")
+
+    # 1. Check for forbidden keywords using word boundaries
+    for keyword in forbidden_keywords:
+        pattern = rf'\b{keyword}\b'
+        if re.search(pattern, sql_lower):
+            raise ValueError(f"SQL not allowed: Potential security risk or unauthorized command detected ('{keyword}'). Only SELECT is permitted.")
+            
+    # Check for forbidden symbols/patterns
+    forbidden_patterns = ['--', '/\\*', '\\*/']
+    for pattern in forbidden_patterns:
+        if re.search(pattern, sql_lower):
+            raise ValueError(f"SQL not allowed: Potential security risk or unauthorized comment detected ('{pattern}').")
+
+    # 2. Block access to sensitive system schemas
+    # Using more comprehensive regex to catch variations like "system"., information_schema. etc.
+    restricted_schemas = ['system', 'information_schema', 'pg_catalog']
+    for schema in restricted_schemas:
+        # Match schema followed by a dot, handling possible quotes
+        pattern = rf'\b(["\']?{schema}["\']?)\s*\.'
+        if re.search(pattern, sql_lower):
+            raise ValueError(f"Access to the '{schema}' schema is restricted.")
+
+    # 3. Ensure it starts with SELECT (or a comment followed by SELECT)
+    # Strip whitespace and common comment patterns for initial check
+    stripped_sql = re.sub(r'/\*.*?\*/', '', sql_lower, flags=re.DOTALL).strip()
+    if not (stripped_sql.startswith('select') or stripped_sql.startswith('with')):
+         raise ValueError("SQL must be a SELECT or WITH statement.")
+
+async def execute_preview(db: AsyncSession, req: QueryPreviewRequest) -> QueryPreviewResponse:
+    try:
+        await validate_sql(req.sql_text)
+    except ValueError as e:
+        return QueryPreviewResponse(columns=[], rows=[], error=str(e))
+        
+    ds = await db.get(DataSource, req.data_source_id)
+    if not ds:
+        return QueryPreviewResponse(columns=[], rows=[], error="Data source not found")
+        
+    try:
+        engine = get_engine(ds.type)
+        password = decrypt_password(ds.encrypted_password) if ds.encrypted_password else None
+        config = {
+            'host': ds.host,
+            'port': ds.port,
+            'username': ds.username,
+            'password': password,
+            'database_name': ds.database_name
+        }
+        
+        result = await engine.execute_query(
+            config=config,
+            sql=req.sql_text,
+            database=req.database or ds.database_name,
+            schema=req.schema_name,
+            limit=req.limit or 100
+        )
+        
+        return QueryPreviewResponse(columns=result['columns'], rows=result['rows'])
+    except Exception as e:
+        return QueryPreviewResponse(columns=[], rows=[], error=str(e))
+
+
+async def create_query(db: AsyncSession, query_in: QueryCreate):
+    await validate_sql(query_in.sql_text)
+    if query_in.schema_name and query_in.schema_name.lower().strip('"\' ') == 'system':
+        raise ValueError("Access to the 'system' schema is restricted.")
+        
+    db_obj = Query(
+        workspace_id=query_in.workspace_id,
+        data_source_id=query_in.data_source_id,
+        name=query_in.name,
+        description=query_in.description,
+        sql_text=query_in.sql_text,
+        database_name=query_in.database_name,
+        schema_name=query_in.schema_name
+    )
+    db.add(db_obj)
+    await db.commit()
+    await db.refresh(db_obj)
+    return db_obj
+
+async def update_query(db: AsyncSession, query_id: uuid.UUID, query_in: QueryUpdate):
+    db_obj = await db.get(Query, query_id)
+    if not db_obj:
+        return None
+        
+    if query_in.sql_text:
+        await validate_sql(query_in.sql_text)
+    if query_in.schema_name and query_in.schema_name.lower().strip('"\' ') == 'system':
+        raise ValueError("Access to the 'system' schema is restricted.")
+        
+    update_data = query_in.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_obj, field, value)
+        
+    await db.commit()
+    await db.refresh(db_obj)
+    return db_obj
+
+async def get_queries(db: AsyncSession, workspace_id: uuid.UUID):
+    query = select(Query).where(Query.workspace_id == workspace_id)
+    result = await db.execute(query)
+    return result.scalars().all()

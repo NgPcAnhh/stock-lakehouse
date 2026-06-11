@@ -1,0 +1,71 @@
+Tất cả các bảng dữ liệu khác được đồng bộ từ MinIO Landing Zone (bucket thongtin-congty-va-bctc) sang Iceberg ở tầng Silver 
+đều sử dụng chung một file là sync_landing_to_iceberg.py (ngoại trừ duy nhất thư mục vn_macro_yearly/ sử dụng file riêng biệt).
+
+Dưới đây là bảng liệt kê danh sách các thư mục nguồn (trong bucket cũ thongtin-congty-va-bctc) và mapping tương ứng của 
+chúng với các bảng Iceberg đích trong datalake mới (stock-datalake):
+================================================================================
+  BẢNG MAPPING THƯ MỤC NGUỒN MINIO -> BẢNG ICEBERG ĐÍCH
+  Bucket nguồn : thongtin-congty-va-bctc
+  Catalog đích  : stock_catalog.stock_db
+================================================================================
+ 
+PHẦN 1 - CÁC BẢNG ĐỘC LẬP (1 thư mục -> 1 bảng)
++-----+------------------------------+------------------------------------------+--------------------+-----------------------------------------------+
+| STT | Thư mục nguồn (MinIO)        | Bảng Iceberg đích                        | Chế độ ghi         | Ghi chú cấu hình đặc biệt                     |
++-----+------------------------------+------------------------------------------+--------------------+-----------------------------------------------+
+|  1  | bctc_luong2/                 | stock_catalog.stock_db.fact_financial_   | append (Upsert)    | Upsert theo khóa: ticker, year, quarter        |
+|     |                              | reports                                  |                    |                                               |
++-----+------------------------------+------------------------------------------+--------------------+-----------------------------------------------+
+|  2  | daily_price/                 | stock_catalog.stock_db.fact_history_     | append (Upsert)    | Cast: trading_date -> prd_id                  |
+|     |                              | price                                    |                    |                                               |
++-----+------------------------------+------------------------------------------+--------------------+-----------------------------------------------+
+|  3  | fin_ratio_v2/                | stock_catalog.stock_db.fact_financial_   | append (Upsert)    | Upsert theo khóa: ticker, year, quarter        |
+|     |                              | ratios                                   |                    |                                               |
++-----+------------------------------+------------------------------------------+--------------------+-----------------------------------------------+
+|  4  | index_price/                 | stock_catalog.stock_db.fact_market_      | append (Upsert)    | Cast: trading_date -> prd_id                  |
+|     |                              | index                                    |                    |                                               |
++-----+------------------------------+------------------------------------------+--------------------+-----------------------------------------------+
+|  5  | overview/                    | stock_catalog.stock_db.dim_company       | overwrite          | Chỉ lấy partition mới nhất để ghi đè          |
++-----+------------------------------+------------------------------------------+--------------------+-----------------------------------------------+
+|  6  | people/                      | stock_catalog.stock_db.dim_owner         | overwrite          | Chỉ lấy partition mới nhất để ghi đè          |
++-----+------------------------------+------------------------------------------+--------------------+-----------------------------------------------+
+|  7  | electric_board_per_day/      | stock_catalog.stock_db.fact_electric_    | append (Upsert)    | Cast: trading_date -> prd_id                  |
+|     |                              | board                                    |                    |                                               |
++-----+------------------------------+------------------------------------------+--------------------+-----------------------------------------------+
+|  8  | news/                        | stock_catalog.stock_db.fact_news         | append (Upsert)    | Cast: published (timestamp) -> prd_id         |
++-----+------------------------------+------------------------------------------+--------------------+-----------------------------------------------+
+|  9  | realtime/                    | stock_catalog.stock_db.fact_realtime_    | append (Upsert)    | Định dạng nguồn: parquet, cast: ts -> prd_id  |
+|     |                              | quotes                                   |                    |                                               |
++-----+------------------------------+------------------------------------------+--------------------+-----------------------------------------------+
+ 
+ 
+PHẦN 2 - CHỈ SỐ VĨ MÔ & KINH TẾ THẾ GIỚI (nhiều thư mục -> 1 bảng)
+Tất cả map vào: stock_catalog.stock_db.fact_macro_economy
+Phân biệt bằng tham số tĩnh: --static asset_type=<VALUE>
++-----+-------------------------------+------------------------------------------+--------------------+-----------------------+
+| STT | Thư mục nguồn (MinIO)         | Bảng Iceberg đích                        | Chế độ ghi         | asset_type (tĩnh)     |
++-----+-------------------------------+------------------------------------------+--------------------+-----------------------+
+| 10  | global_index/usd_vnd/         | stock_catalog.stock_db.fact_macro_       | append (Upsert)    | USD_VND               |
+|     |                               | economy                                  |                    |                       |
++-----+-------------------------------+------------------------------------------+--------------------+-----------------------+
+| 11  | global_index/dxy_index/       | stock_catalog.stock_db.fact_macro_       | append (Upsert)    | DXY                   |
+|     |                               | economy                                  |                    |                       |
++-----+-------------------------------+------------------------------------------+--------------------+-----------------------+
+| 12  | global_index/usd_cny/         | stock_catalog.stock_db.fact_macro_       | append (Upsert)    | USD_CNY               |
+|     |                               | economy                                  |                    |                       |
++-----+-------------------------------+------------------------------------------+--------------------+-----------------------+
+| 13  | global_index/eur_usd/         | stock_catalog.stock_db.fact_macro_       | append (Upsert)    | EUR_USD               |
+|     |                               | economy                                  |                    |                       |
++-----+-------------------------------+------------------------------------------+--------------------+-----------------------+
+| 14  | global_index/us_bond_10y/     | stock_catalog.stock_db.fact_macro_       | append (Upsert)    | US_BOND_10Y           |
+|     |                               | economy                                  |                    |                       |
++-----+-------------------------------+------------------------------------------+--------------------+-----------------------+
+| 15  | macro_economy/xau/            | stock_catalog.stock_db.fact_macro_       | append (Upsert)    | XAU  (Vàng)           |
+|     |                               | economy                                  |                    |                       |
++-----+-------------------------------+------------------------------------------+--------------------+-----------------------+
+| 16  | macro_economy/oil/            | stock_catalog.stock_db.fact_macro_       | append (Upsert)    | OIL  (Dầu thô)        |
+|     |                               | economy                                  |                    |                       |
++-----+-------------------------------+------------------------------------------+--------------------+-----------------------+
+| 17  | macro_economy/dowjone/        | stock_catalog.stock_db.fact_macro_       | append (Upsert)    | DJI  (Dow Jones)      |
+|     |                               | economy                                  |                    |                       |
++-----+-------------------------------+------------------------------------------+--------------------+-----------------------+

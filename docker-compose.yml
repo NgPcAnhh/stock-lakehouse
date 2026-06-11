@@ -1,0 +1,4 @@
+include:
+  - path: data-pipeline/etl/docker-compose.yaml
+  - path: bi-platform/docker-compose.yml
+
