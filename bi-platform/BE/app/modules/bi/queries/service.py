@@ -17,7 +17,14 @@ async def validate_sql(sql_text: str):
         'create', 'grant', 'revoke', 'call', 'exec', 'merge',
         'pg_sleep', 'pg_read_file', 'pg_ls_dir', 'copy'
     ]
-    sql_lower = sql_text.lower().strip()
+    
+    # Strip comments before validation to allow comments but prevent hidden keywords
+    # Remove block comments /* ... */
+    stripped_sql = re.sub(r'/\*.*?\*/', ' ', sql_text, flags=re.DOTALL)
+    # Remove line comments -- ...
+    stripped_sql = re.sub(r'--.*$', ' ', stripped_sql, flags=re.MULTILINE)
+    
+    sql_lower = stripped_sql.lower().strip()
     
     # Remove trailing semicolon if it exists at the very end
     if sql_lower.endswith(';'):
@@ -33,12 +40,6 @@ async def validate_sql(sql_text: str):
         if re.search(pattern, sql_lower):
             raise ValueError(f"SQL not allowed: Potential security risk or unauthorized command detected ('{keyword}'). Only SELECT is permitted.")
             
-    # Check for forbidden symbols/patterns
-    forbidden_patterns = ['--', '/\\*', '\\*/']
-    for pattern in forbidden_patterns:
-        if re.search(pattern, sql_lower):
-            raise ValueError(f"SQL not allowed: Potential security risk or unauthorized comment detected ('{pattern}').")
-
     # 2. Block access to sensitive system schemas
     # Using more comprehensive regex to catch variations like "system"., information_schema. etc.
     restricted_schemas = ['system', 'information_schema', 'pg_catalog']
@@ -49,9 +50,7 @@ async def validate_sql(sql_text: str):
             raise ValueError(f"Access to the '{schema}' schema is restricted.")
 
     # 3. Ensure it starts with SELECT (or a comment followed by SELECT)
-    # Strip whitespace and common comment patterns for initial check
-    stripped_sql = re.sub(r'/\*.*?\*/', '', sql_lower, flags=re.DOTALL).strip()
-    if not (stripped_sql.startswith('select') or stripped_sql.startswith('with')):
+    if not (sql_lower.startswith('select') or sql_lower.startswith('with')):
          raise ValueError("SQL must be a SELECT or WITH statement.")
 
 async def execute_preview(db: AsyncSession, req: QueryPreviewRequest) -> QueryPreviewResponse:

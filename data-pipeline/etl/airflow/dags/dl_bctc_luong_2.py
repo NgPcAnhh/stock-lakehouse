@@ -33,7 +33,7 @@ MULTIPLIER = 1_000_000
 UPSERT_KEY_COLS = ["ticker", "year", "quarter", "ind_code"]
 
 # mapping file kept inside plugins folder
-MAPPING_FILE = Path(__file__).resolve().parents[1] / "plugins" / "logic" / "bctc.md"
+MAPPING_FILE = Path(__file__).resolve().parents[1] / "plugins" / "logic" / "bctc_ind_name.json"
 TICKERS_FILE = Path(__file__).resolve().parents[1] / "plugins" / "logic" / "tickers_cache.txt"
 
 # Scrape constants copied from script logic
@@ -685,7 +685,7 @@ def bctc_luong_2_dag():
         print(f"partition_folder={partition_folder}")
         print("=" * 80)
 
-        # load mapping from plugins/logic/bctc.md (validate upfront)
+        # load mapping from plugins/logic/bctc_ind_name.json (validate upfront)
         ind_map_exact, _ = _load_mapping()
         print(f"Loaded mapping entries: {len(ind_map_exact):,} from {MAPPING_FILE}")
 

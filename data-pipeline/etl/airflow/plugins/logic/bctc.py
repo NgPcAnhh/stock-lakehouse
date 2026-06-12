@@ -17,13 +17,18 @@ CALL_INTERVAL = 3.2
 
 
 # ---------------------------------------------------------------------------
-# ind_name → ind_code mapping (loaded from bctc.md)
+# ind_name → ind_code mapping (loaded from bctc_ind_name.json)
 # ---------------------------------------------------------------------------
-_MAPPING_FILE = Path(__file__).resolve().parent / "bctc.md"
+_MAPPING_FILE = Path(__file__).resolve().parent / "bctc_ind_name.json"
 
-def _load_ind_code_mapping() -> dict:
-    """Load ind_name → ind_code mapping from bctc.md JSON file."""
-    mapping = {}
+def _norm_text(text: object) -> str:
+    s = "" if text is None else str(text).strip().lower()
+    return re.sub(r"\s+", " ", s)
+
+def _load_ind_code_mapping() -> tuple[dict, dict]:
+    """Load ind_name → ind_code mapping from bctc_ind_name.json file."""
+    exact = {}
+    norm = {}
     try:
         with open(_MAPPING_FILE, "r", encoding="utf-8") as f:
             entries = json.load(f)
@@ -31,12 +36,13 @@ def _load_ind_code_mapping() -> dict:
             name = str(entry.get("ind_name", "")).strip()
             code = str(entry.get("ind_code", "")).strip()
             if name and code:
-                mapping[name] = code
+                exact[name] = code
+                norm[_norm_text(name)] = code
     except Exception as exc:
-        print(f"⚠ Could not load bctc.md mapping: {exc}")
-    return mapping
+        print(f"⚠ Could not load bctc_ind_name.json mapping: {exc}")
+    return exact, norm
 
-IND_NAME_TO_CODE = _load_ind_code_mapping()
+IND_NAME_TO_CODE_EXACT, IND_NAME_TO_CODE_NORM = _load_ind_code_mapping()
 
 
 def _slugify_fallback(text: str) -> str:
@@ -48,7 +54,12 @@ def _slugify_fallback(text: str) -> str:
 def get_ind_code(ind_name: str) -> str:
     """Lookup ind_code from mapping, fallback to slugify."""
     name = str(ind_name).strip()
-    return IND_NAME_TO_CODE.get(name, _slugify_fallback(name))
+    if name in IND_NAME_TO_CODE_EXACT:
+        return IND_NAME_TO_CODE_EXACT[name]
+    normed = _norm_text(name)
+    if normed in IND_NAME_TO_CODE_NORM:
+        return IND_NAME_TO_CODE_NORM[normed]
+    return _slugify_fallback(name)
 
 
 # ---------------------------------------------------------------------------

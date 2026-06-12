@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 import requests
 import time
 import logging
+import base64
+import json
 from airflow.decorators import dag, task
 from airflow.models import Variable
 from airflow.exceptions import AirflowException
@@ -22,19 +24,13 @@ default_args = {
     "retry_delay": timedelta(minutes=5),
 }
 
-def submit_spark_job(
-    script_name: str,
-    target_table: str,
-    source_path: str,
-    time_col: str = None,
-    time_type: str = None,
-    mode: str = "append",
-    static: str = None,
-    file_format: str = "csv"
-):
-    # Construct the spark-submit command
-    # Resolve script path based on reorganization
-    script_path = f"/opt/spark/apps/minio_to_iceberg/{script_name}"
+def submit_spark_job(tasks: list):
+    # Construct base64 config
+    config_dict = {"tasks": tasks}
+    config_json = json.dumps(config_dict)
+    config_base64 = base64.b64encode(config_json.encode('utf-8')).decode('utf-8')
+    
+    script_path = "/opt/spark/apps/minio_to_iceberg/sync_all_landing_to_iceberg.py"
 
     cmd = [
         "/opt/spark/bin/spark-submit",
@@ -44,22 +40,11 @@ def submit_spark_job(
         "--executor-memory", "1500m",
         "--driver-memory", "1500m",
         script_path,
-        "--source", source_path
+        "--base64_config", config_base64
     ]
-    
-    if script_name == "sync_landing_to_iceberg.py":
-        cmd.extend(["--target", target_table])
-        cmd.extend(["--mode", mode])
-        cmd.extend(["--format", file_format])
-        if time_col:
-            cmd.extend(["--time_col", time_col])
-        if time_type:
-            cmd.extend(["--time_type", time_type])
-        if static:
-            cmd.extend(["--static", static])
             
     cmd_str = " ".join(cmd)
-    logger.info(f"Submitting Spark job: {cmd_str}")
+    logger.info("Submitting unified Spark job to sync all tables...")
     
     # POST to spark_cmd_server
     try:
@@ -87,7 +72,7 @@ def submit_spark_job(
                 logger.info("✅ Spark job finished successfully!")
                 logger.info("--- Spark Job Logs ---")
                 logger.info(task_info.get("log", ""))
-                return f"✅ Success: {target_table} ({source_path})"
+                return "✅ Success: All sync tasks executed."
             elif status == "FAILED":
                 logger.error("❌ Spark job failed!")
                 logger.error("--- Spark Job Logs ---")
@@ -111,283 +96,172 @@ def submit_spark_job(
     max_active_runs=1,
     max_active_tasks=1,
     tags=["sync", "minio", "iceberg", "etl", "datalake"],
-    description="Synchronize all raw data from MinIO landing to Iceberg catalog",
+    description="Synchronize all raw data from MinIO landing to Iceberg catalog in a single Spark Session",
 )
 def minio_to_iceberg_sync():
     
-    @task(task_id="sync_bctc")
-    def task_sync_bctc():
+    @task(task_id="sync_all_to_iceberg")
+    def task_sync_all_to_iceberg():
+        tasks = []
+        
+        # 1. bctc
         partitions = get_all_partitions(MINIO_BUCKET, "bctc_luong2/", MINIO_CONN_ID)
-        if not partitions:
-            return "❌ No partition found for BCTC"
-        results = []
-        for partition in partitions:
-            source_path = f"s3a://{MINIO_BUCKET}/{partition}"
-            res = submit_spark_job(
-                script_name="sync_landing_to_iceberg.py",
-                target_table="fact_financial_reports",
-                source_path=source_path,
-                mode="append"
-            )
-            results.append(res)
-        return f"✅ Synced {len(partitions)} BCTC partition(s)"
-        
-    @task(task_id="sync_daily_price")
-    def task_sync_daily_price():
+        for p in partitions:
+            tasks.append({
+                "target": "fact_financial_reports",
+                "source": f"s3a://{MINIO_BUCKET}/{p}",
+                "mode": "append",
+                "script_type": "standard"
+            })
+            
+        # 2. daily_price
         partitions = get_all_partitions(MINIO_BUCKET, "daily_price/", MINIO_CONN_ID)
-        if not partitions:
-            return "❌ No partition found for daily price"
-        results = []
-        for partition in partitions:
-            source_path = f"s3a://{MINIO_BUCKET}/{partition}"
-            res = submit_spark_job(
-                script_name="sync_landing_to_iceberg.py",
-                target_table="fact_history_price",
-                source_path=source_path,
-                time_col="trading_date",
-                time_type="date",
-                mode="append"
-            )
-            results.append(res)
-        return f"✅ Synced {len(partitions)} daily price partition(s)"
-        
-    @task(task_id="sync_financial_ratio")
-    def task_sync_financial_ratio():
+        for p in partitions:
+            tasks.append({
+                "target": "fact_history_price",
+                "source": f"s3a://{MINIO_BUCKET}/{p}",
+                "time_col": "trading_date",
+                "time_type": "date",
+                "mode": "append",
+                "script_type": "standard"
+            })
+            
+        # 3. financial_ratio
         partitions = get_all_partitions(MINIO_BUCKET, "fin_ratio_v2/", MINIO_CONN_ID)
-        if not partitions:
-            return "❌ No partition found for financial ratio"
-        results = []
-        for partition in partitions:
-            source_path = f"s3a://{MINIO_BUCKET}/{partition}"
-            res = submit_spark_job(
-                script_name="sync_landing_to_iceberg.py",
-                target_table="fact_financial_ratios",
-                source_path=source_path,
-                mode="append"
-            )
-            results.append(res)
-        return f"✅ Synced {len(partitions)} financial ratio partition(s)"
-        
-    @task(task_id="sync_index_price")
-    def task_sync_index_price():
+        for p in partitions:
+            tasks.append({
+                "target": "fact_financial_ratios",
+                "source": f"s3a://{MINIO_BUCKET}/{p}",
+                "mode": "append",
+                "script_type": "standard"
+            })
+            
+        # 4. index_price
         partitions = get_all_partitions(MINIO_BUCKET, "index_price/", MINIO_CONN_ID)
-        if not partitions:
-            return "❌ No partition found for index price"
-        results = []
-        for partition in partitions:
-            source_path = f"s3a://{MINIO_BUCKET}/{partition}"
-            res = submit_spark_job(
-                script_name="sync_landing_to_iceberg.py",
-                target_table="fact_market_index",
-                source_path=source_path,
-                time_col="trading_date",
-                time_type="date",
-                mode="append"
-            )
-            results.append(res)
-        return f"✅ Synced {len(partitions)} index price partition(s)"
-        
-    @task(task_id="sync_overview")
-    def task_sync_overview():
+        for p in partitions:
+            tasks.append({
+                "target": "fact_market_index",
+                "source": f"s3a://{MINIO_BUCKET}/{p}",
+                "time_col": "trading_date",
+                "time_type": "date",
+                "mode": "append",
+                "script_type": "standard"
+            })
+            
+        # 5. overview
         latest_partition = get_latest_partition(MINIO_BUCKET, "overview/", MINIO_CONN_ID)
-        if not latest_partition:
-            return "❌ No partition found for overview"
-        source_path = f"s3a://{MINIO_BUCKET}/{latest_partition}"
-        return submit_spark_job(
-            script_name="sync_landing_to_iceberg.py",
-            target_table="dim_company",
-            source_path=source_path,
-            mode="overwrite"
-        )
-        
-    @task(task_id="sync_people")
-    def task_sync_people():
+        if latest_partition:
+            tasks.append({
+                "target": "dim_company",
+                "source": f"s3a://{MINIO_BUCKET}/{latest_partition}",
+                "mode": "overwrite",
+                "script_type": "standard"
+            })
+            
+        # 6. people
         latest_partition = get_latest_partition(MINIO_BUCKET, "people/", MINIO_CONN_ID)
-        if not latest_partition:
-            return "❌ No partition found for people"
-        source_path = f"s3a://{MINIO_BUCKET}/{latest_partition}"
-        return submit_spark_job(
-            script_name="sync_landing_to_iceberg.py",
-            target_table="dim_owner",
-            source_path=source_path,
-            mode="overwrite"
-        )
-        
-    @task(task_id="sync_electric_board")
-    def task_sync_electric_board():
+        if latest_partition:
+            tasks.append({
+                "target": "dim_owner",
+                "source": f"s3a://{MINIO_BUCKET}/{latest_partition}",
+                "mode": "overwrite",
+                "script_type": "standard"
+            })
+            
+        # 7. electric_board
         partitions = get_all_partitions(MINIO_BUCKET, "electric_board_per_day/", MINIO_CONN_ID)
-        if not partitions:
-            return "❌ No partition found for electric board"
-        results = []
-        for partition in partitions:
-            source_path = f"s3a://{MINIO_BUCKET}/{partition}"
-            res = submit_spark_job(
-                script_name="sync_landing_to_iceberg.py",
-                target_table="fact_electric_board",
-                source_path=source_path,
-                time_col="trading_date",
-                time_type="date",
-                mode="append"
-            )
-            results.append(res)
-        return f"✅ Synced {len(partitions)} electric board partition(s)"
-        
-    @task(task_id="sync_news")
-    def task_sync_news():
+        for p in partitions:
+            tasks.append({
+                "target": "fact_electric_board",
+                "source": f"s3a://{MINIO_BUCKET}/{p}",
+                "time_col": "trading_date",
+                "time_type": "date",
+                "mode": "append",
+                "script_type": "standard"
+            })
+            
+        # 8. news
         partitions = get_all_partitions(MINIO_BUCKET, "news/", MINIO_CONN_ID)
-        if not partitions:
-            return "❌ No partition found for news"
-        results = []
-        for partition in partitions:
-            source_path = f"s3a://{MINIO_BUCKET}/{partition}"
-            res = submit_spark_job(
-                script_name="sync_landing_to_iceberg.py",
-                target_table="fact_news",
-                source_path=source_path,
-                time_col="published",
-                time_type="timestamp",
-                mode="append"
-            )
-            results.append(res)
-        return f"✅ Synced {len(partitions)} news partition(s)"
-        
-    @task(task_id="sync_vn_macro_yearly")
-    def task_sync_vn_macro_yearly():
+        for p in partitions:
+            tasks.append({
+                "target": "fact_news",
+                "source": f"s3a://{MINIO_BUCKET}/{p}",
+                "time_col": "published",
+                "time_type": "timestamp",
+                "mode": "append",
+                "script_type": "standard"
+            })
+            
+        # 9. vn_macro_yearly
         latest_partition = get_latest_partition(MINIO_BUCKET, "vn_macro_yearly/", MINIO_CONN_ID)
-        if not latest_partition:
-            return "❌ No partition found for VN macro yearly"
-        source_path = f"s3a://{MINIO_BUCKET}/{latest_partition}"
-        return submit_spark_job(
-            script_name="sync_vn_macro_yearly_to_iceberg.py",
-            target_table="fact_vn_macro_yearly",
-            source_path=source_path
-        )
-
-    # === Global Index Subfolders ===
-    @task(task_id="sync_global_index_usd_vnd")
-    def task_sync_global_index_usd_vnd():
-        partitions = get_all_partitions(MINIO_BUCKET, "global_index/usd_vnd/", MINIO_CONN_ID)
-        if not partitions: return "❌ No partition"
-        for partition in partitions:
-            submit_spark_job("sync_landing_to_iceberg.py", "fact_macro_economy", f"s3a://{MINIO_BUCKET}/{partition}", "date", "date", "append", "asset_type=USD_VND")
-        return f"✅ Synced {len(partitions)} usd_vnd partition(s)"
-
-    @task(task_id="sync_global_index_dxy")
-    def task_sync_global_index_dxy():
-        partitions = get_all_partitions(MINIO_BUCKET, "global_index/dxy_index/", MINIO_CONN_ID)
-        if not partitions: return "❌ No partition"
-        for partition in partitions:
-            submit_spark_job("sync_landing_to_iceberg.py", "fact_macro_economy", f"s3a://{MINIO_BUCKET}/{partition}", "date", "date", "append", "asset_type=DXY")
-        return f"✅ Synced {len(partitions)} dxy partition(s)"
-
-    @task(task_id="sync_global_index_usd_cny")
-    def task_sync_global_index_usd_cny():
-        partitions = get_all_partitions(MINIO_BUCKET, "global_index/usd_cny/", MINIO_CONN_ID)
-        if not partitions: return "❌ No partition"
-        for partition in partitions:
-            submit_spark_job("sync_landing_to_iceberg.py", "fact_macro_economy", f"s3a://{MINIO_BUCKET}/{partition}", "date", "date", "append", "asset_type=USD_CNY")
-        return f"✅ Synced {len(partitions)} usd_cny partition(s)"
-
-    @task(task_id="sync_global_index_eur_usd")
-    def task_sync_global_index_eur_usd():
-        partitions = get_all_partitions(MINIO_BUCKET, "global_index/eur_usd/", MINIO_CONN_ID)
-        if not partitions: return "❌ No partition"
-        for partition in partitions:
-            submit_spark_job("sync_landing_to_iceberg.py", "fact_macro_economy", f"s3a://{MINIO_BUCKET}/{partition}", "date", "date", "append", "asset_type=EUR_USD")
-        return f"✅ Synced {len(partitions)} eur_usd partition(s)"
-
-    @task(task_id="sync_global_index_us_bond_10y")
-    def task_sync_global_index_us_bond_10y():
-        partitions = get_all_partitions(MINIO_BUCKET, "global_index/us_bond_10y/", MINIO_CONN_ID)
-        if not partitions: return "❌ No partition"
-        for partition in partitions:
-            submit_spark_job("sync_landing_to_iceberg.py", "fact_macro_economy", f"s3a://{MINIO_BUCKET}/{partition}", "date", "date", "append", "asset_type=US_BOND_10Y")
-        return f"✅ Synced {len(partitions)} us_bond_10y partition(s)"
-
-    # === Macro Economy Subfolders ===
-    @task(task_id="sync_macro_economy_xau")
-    def task_sync_macro_economy_xau():
-        partitions = get_all_partitions(MINIO_BUCKET, "macro_economy/xau/", MINIO_CONN_ID)
-        if not partitions: return "❌ No partition"
-        for partition in partitions:
-            submit_spark_job("sync_landing_to_iceberg.py", "fact_macro_economy", f"s3a://{MINIO_BUCKET}/{partition}", "date", "date", "append", "asset_type=XAU")
-        return f"✅ Synced {len(partitions)} xau partition(s)"
-
-    @task(task_id="sync_macro_economy_oil")
-    def task_sync_macro_economy_oil():
-        partitions = get_all_partitions(MINIO_BUCKET, "macro_economy/oil/", MINIO_CONN_ID)
-        if not partitions: return "❌ No partition"
-        for partition in partitions:
-            submit_spark_job("sync_landing_to_iceberg.py", "fact_macro_economy", f"s3a://{MINIO_BUCKET}/{partition}", "date", "date", "append", "asset_type=OIL")
-        return f"✅ Synced {len(partitions)} oil partition(s)"
-
-    @task(task_id="sync_macro_economy_dji")
-    def task_sync_macro_economy_dji():
-        partitions = get_all_partitions(MINIO_BUCKET, "macro_economy/dowjone/", MINIO_CONN_ID)
-        if not partitions: return "❌ No partition"
-        for partition in partitions:
-            submit_spark_job("sync_landing_to_iceberg.py", "fact_macro_economy", f"s3a://{MINIO_BUCKET}/{partition}", "date", "date", "append", "asset_type=DJI")
-        return f"✅ Synced {len(partitions)} dji partition(s)"
-
-    # === Realtime Quotes ===
-    @task(task_id="sync_realtime_quotes")
-    def task_sync_realtime_quotes():
+        if latest_partition:
+            tasks.append({
+                "target": "fact_vn_macro_yearly",
+                "source": f"s3a://{MINIO_BUCKET}/{latest_partition}",
+                "script_type": "vn_macro_yearly"
+            })
+            
+        # === Global Index Subfolders ===
+        global_indexes = [
+            ("global_index/usd_vnd/", "USD_VND"),
+            ("global_index/dxy_index/", "DXY"),
+            ("global_index/usd_cny/", "USD_CNY"),
+            ("global_index/eur_usd/", "EUR_USD"),
+            ("global_index/us_bond_10y/", "US_BOND_10Y")
+        ]
+        for prefix, asset_type in global_indexes:
+            partitions = get_all_partitions(MINIO_BUCKET, prefix, MINIO_CONN_ID)
+            for p in partitions:
+                tasks.append({
+                    "target": "fact_macro_economy",
+                    "source": f"s3a://{MINIO_BUCKET}/{p}",
+                    "time_col": "date",
+                    "time_type": "date",
+                    "mode": "append",
+                    "static": f"asset_type={asset_type}",
+                    "script_type": "standard"
+                })
+                
+        # === Macro Economy Subfolders ===
+        macro_economies = [
+            ("macro_economy/xau/", "XAU"),
+            ("macro_economy/oil/", "OIL"),
+            ("macro_economy/dowjone/", "DJI")
+        ]
+        for prefix, asset_type in macro_economies:
+            partitions = get_all_partitions(MINIO_BUCKET, prefix, MINIO_CONN_ID)
+            for p in partitions:
+                tasks.append({
+                    "target": "fact_macro_economy",
+                    "source": f"s3a://{MINIO_BUCKET}/{p}",
+                    "time_col": "date",
+                    "time_type": "date",
+                    "mode": "append",
+                    "static": f"asset_type={asset_type}",
+                    "script_type": "standard"
+                })
+                
+        # === Realtime Quotes ===
         partitions = get_all_partitions(MINIO_BUCKET, "realtime/", MINIO_CONN_ID)
-        if not partitions:
-            return "❌ No partition found for realtime quotes"
-        results = []
-        for partition in partitions:
-            source_path = f"s3a://{MINIO_BUCKET}/{partition}"
-            res = submit_spark_job(
-                script_name="sync_landing_to_iceberg.py",
-                target_table="fact_realtime_quotes",
-                source_path=source_path,
-                time_col="ts",
-                time_type="timestamp",
-                mode="append",
-                file_format="parquet"
-            )
-            results.append(res)
-        return f"✅ Synced {len(partitions)} realtime quotes partition(s)"
-
-    # Summary Report task
-    @task(task_id="summary_report")
-    def task_summary_report(results: list):
-        logger.info("=" * 70)
-        logger.info("📊 MINIO TO ICEBERG DATALAKE SYNC - SUMMARY REPORT")
-        logger.info("=" * 70)
-        for idx, result in enumerate(results):
-            logger.info(f"{idx + 1}. {result}")
-        logger.info("=" * 70)
-        success_count = sum(1 for r in results if r and '✅' in str(r))
-        logger.info(f"✅ Successful: {success_count}/{len(results)}")
-        if success_count < len(results):
-            logger.warning(f"⚠️ Failed: {len(results) - success_count}/{len(results)}")
-        return f"Completed: {success_count}/{len(results)} successful"
-
-    # Define tasks execution
-    results = [
-        task_sync_bctc(),
-        task_sync_daily_price(),
-        task_sync_financial_ratio(),
-        task_sync_index_price(),
-        task_sync_overview(),
-        task_sync_people(),
-        task_sync_electric_board(),
-        task_sync_news(),
-        task_sync_vn_macro_yearly(),
-        task_sync_global_index_usd_vnd(),
-        task_sync_global_index_dxy(),
-        task_sync_global_index_usd_cny(),
-        task_sync_global_index_eur_usd(),
-        task_sync_global_index_us_bond_10y(),
-        task_sync_macro_economy_xau(),
-        task_sync_macro_economy_oil(),
-        task_sync_macro_economy_dji(),
-        task_sync_realtime_quotes(),
-    ]
-    
-    task_summary_report(results)
+        for p in partitions:
+            tasks.append({
+                "target": "fact_realtime_quotes",
+                "source": f"s3a://{MINIO_BUCKET}/{p}",
+                "time_col": "ts",
+                "time_type": "timestamp",
+                "mode": "append",
+                "format": "parquet",
+                "script_type": "standard"
+            })
+            
+        if not tasks:
+            logger.info("⚠️ No new partitions found to sync.")
+            return "No partitions found"
+            
+        logger.info(f"🚀 Submitting {len(tasks)} sync tasks to Spark...")
+        return submit_spark_job(tasks)
+        
+    task_sync_all_to_iceberg()
 
 # Instantiate the DAG
 minio_to_iceberg_sync()

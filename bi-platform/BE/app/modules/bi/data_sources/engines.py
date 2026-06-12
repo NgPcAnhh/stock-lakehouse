@@ -106,7 +106,7 @@ class PostgresEngine(DatabaseEngine):
                 clean_sql = clean_sql[:-1].strip()
 
             actual_limit = min(limit or 100, 100000)
-            wrapped_sql = f"SELECT * FROM ({clean_sql}) AS subquery LIMIT {actual_limit}"
+            wrapped_sql = f"SELECT * FROM (\n{clean_sql}\n) AS subquery LIMIT {actual_limit}"
             
             records = await conn.fetch(wrapped_sql)
             
@@ -203,7 +203,7 @@ class ClickHouseEngine(DatabaseEngine):
                 clean_sql = clean_sql[:-1].strip()
 
             actual_limit = min(limit or 100, 100000)
-            wrapped_sql = f"SELECT * FROM ({clean_sql}) LIMIT {actual_limit}"
+            wrapped_sql = f"SELECT * FROM (\n{clean_sql}\n) LIMIT {actual_limit}"
             
             result = client.query(wrapped_sql)
             
@@ -292,7 +292,7 @@ class MySQLEngine(DatabaseEngine):
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 clean_sql = sql.strip().rstrip(';')
                 actual_limit = min(limit or 100, 100000)
-                wrapped_sql = f"SELECT * FROM ({clean_sql}) AS subquery LIMIT {actual_limit}"
+                wrapped_sql = f"SELECT * FROM (\n{clean_sql}\n) AS subquery LIMIT {actual_limit}"
                 
                 await cur.execute(wrapped_sql)
                 rows = await cur.fetchall()
@@ -380,7 +380,7 @@ class SQLServerEngine(DatabaseEngine):
             clean_sql = sql.strip().rstrip(';')
             actual_limit = min(limit or 100, 100000)
             # SQL Server uses TOP for limit
-            wrapped_sql = f"SELECT TOP {actual_limit} * FROM ({clean_sql}) AS subquery"
+            wrapped_sql = f"SELECT TOP {actual_limit} * FROM (\n{clean_sql}\n) AS subquery"
             
             cur.execute(wrapped_sql)
             rows = cur.fetchall()

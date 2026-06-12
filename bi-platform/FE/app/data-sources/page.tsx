@@ -23,13 +23,30 @@ import {
   ChevronLeft,
   ChevronRight,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  Download,
+  FileText,
+  FileJson,
+  FileCode
 } from "lucide-react";
 import * as Sonner from "sonner";
 
 const WORKSPACE_ID = "00000000-0000-0000-0000-000000000000";
 
 export default function DataSourcesPage() {
+  const [exportLoading, setExportLoading] = useState(false);
+  const [showExportDropdown, setShowExportDropdown] = useState(false);
+  const exportRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (exportRef.current && !exportRef.current.contains(event.target as Node)) {
+        setShowExportDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text).then(() => {
       Sonner.toast.success(`Copied "${text}" to clipboard`);
@@ -709,6 +726,91 @@ export default function DataSourcesPage() {
     }
   };
 
+  const handleExport = async (format: 'txt' | 'csv' | 'excel' | 'json') => {
+    if (!selectedSourceId || !sql) {
+      Sonner.toast.error("Vui lòng chọn nguồn dữ liệu và nhập câu lệnh SQL");
+      return;
+    }
+
+    setExportLoading(true);
+    setShowExportDropdown(false);
+    
+    try {
+      // Fetch full records (up to a large limit)
+      // The user wants "full records", so we use a high limit like 100,000
+      const res = await api.queries.preview({
+        data_source_id: selectedSourceId,
+        sql_text: sql,
+        database: selectedDatabase,
+        schema_name: selectedSchema,
+        limit: 100000 // High limit for export
+      });
+
+      if (res.error) {
+        Sonner.toast.error(`Lỗi khi lấy dữ liệu xuất: ${res.error}`);
+        setExportLoading(false);
+        return;
+      }
+
+      const rows = res.rows;
+      const columns = res.columns.map((c: any) => c.name);
+      const filename = `export_${new Date().getTime()}`;
+
+      if (format === 'csv') {
+        const csvContent = [
+          columns.join(','),
+          ...rows.map((row: any) => columns.map((col: string) => {
+            const val = row[col];
+            if (val === null || val === undefined) return '';
+            const strVal = String(val);
+            if (strVal.includes(',') || strVal.includes('"') || strVal.includes('\n')) {
+              return `"${strVal.replace(/"/g, '""')}"`;
+            }
+            return strVal;
+          }).join(','))
+        ].join('\n');
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${filename}.csv`;
+        link.click();
+      } 
+      else if (format === 'excel') {
+        const worksheet = XLSX.utils.json_to_sheet(rows);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Results");
+        XLSX.writeFile(workbook, `${filename}.xlsx`);
+      } 
+      else if (format === 'json') {
+        const jsonContent = JSON.stringify(rows, null, 2);
+        const blob = new Blob([jsonContent], { type: 'application/json' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${filename}.json`;
+        link.click();
+      } 
+      else if (format === 'txt') {
+        const txtContent = rows.map((row: any) => 
+          columns.map((col: string) => `${col}: ${row[col]}`).join(' | ')
+        ).join('\n');
+        
+        const blob = new Blob([txtContent], { type: 'text/plain' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${filename}.txt`;
+        link.click();
+      }
+
+      Sonner.toast.success(`Đã xuất dữ liệu thành công (${rows.length} bản ghi)`);
+    } catch (err: any) {
+      console.error(err);
+      Sonner.toast.error(`Lỗi xuất dữ liệu: ${err.response?.data?.detail || err.message}`);
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
   // Rendering Helper for Connections Grid
   const renderConnectionsTab = () => {
     const filteredConnections = dataSources.filter(ds => 
@@ -1128,6 +1230,46 @@ export default function DataSourcesPage() {
                   >
                     <Save className="w-4 h-4" /> Save Dataset
                   </button>
+
+                  {/* Export Dropdown */}
+                  <div className="relative" ref={exportRef}>
+                    <button 
+                      onClick={() => setShowExportDropdown(!showExportDropdown)}
+                      disabled={!previewData || exportLoading}
+                      className="flex items-center gap-2 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 text-neutral-200 px-3 py-1.5 rounded text-sm font-medium transition-colors border border-neutral-700"
+                    >
+                      {exportLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                      Export
+                    </button>
+                    {showExportDropdown && (
+                      <div className="absolute right-0 mt-2 w-40 bg-neutral-900 border border-neutral-800 rounded-lg shadow-xl z-50 overflow-hidden py-1">
+                        <button 
+                          onClick={() => handleExport('excel')}
+                          className="w-full flex items-center gap-2 px-4 py-2 text-sm text-neutral-300 hover:bg-orange-600 hover:text-white transition-colors"
+                        >
+                          <FileSpreadsheet className="w-4 h-4" /> Excel (.xlsx)
+                        </button>
+                        <button 
+                          onClick={() => handleExport('csv')}
+                          className="w-full flex items-center gap-2 px-4 py-2 text-sm text-neutral-300 hover:bg-orange-600 hover:text-white transition-colors"
+                        >
+                          <FileCode className="w-4 h-4" /> CSV (.csv)
+                        </button>
+                        <button 
+                          onClick={() => handleExport('json')}
+                          className="w-full flex items-center gap-2 px-4 py-2 text-sm text-neutral-300 hover:bg-orange-600 hover:text-white transition-colors"
+                        >
+                          <FileJson className="w-4 h-4" /> JSON (.json)
+                        </button>
+                        <button 
+                          onClick={() => handleExport('txt')}
+                          className="w-full flex items-center gap-2 px-4 py-2 text-sm text-neutral-300 hover:bg-orange-600 hover:text-white transition-colors"
+                        >
+                          <FileText className="w-4 h-4" /> Text (.txt)
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
               <textarea

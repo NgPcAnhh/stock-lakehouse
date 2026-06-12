@@ -436,7 +436,7 @@ services:
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
       - SPARK_LOCAL_IP=spark-worker
-      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_CORES=4
       - SPARK_WORKER_MEMORY=2G
     volumes:
       - ./spark/apps:/opt/spark/apps
@@ -450,7 +450,7 @@ services:
   spark-streaming-consumer:
     image: apache/spark:3.5.1
     container_name: spark-streaming-consumer
-    command: /opt/spark/bin/spark-submit --conf spark.jars.ivy=/tmp/.ivy --packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0,org.apache.hadoop:hadoop-aws:3.3.4,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 --master spark://spark-master:7077 /opt/spark/apps/kafka_to_iceberg/stream_kafka_to_iceberg.py
+    command: /opt/spark/bin/spark-submit --conf spark.jars.ivy=/tmp/.ivy --conf spark.cores.max=1 --packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0,org.apache.hadoop:hadoop-aws:3.3.4,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 --master spark://spark-master:7077 /opt/spark/apps/kafka_to_iceberg/stream_kafka_to_iceberg.py
     volumes:
       - ./spark/apps:/opt/spark/apps
       - ./spark/conf:/opt/spark/conf

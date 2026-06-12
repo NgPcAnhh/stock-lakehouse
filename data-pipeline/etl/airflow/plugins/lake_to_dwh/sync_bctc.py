@@ -248,28 +248,38 @@ def sync_bctc_to_db(
     rows_after_cleaning = len(df)
     print(f"After cleaning: {rows_after_cleaning} rows")
     
-    # Step 4: Generate ind_code from bctc.md mapping
-    print("\n[4/5] Mapping ind_code from bctc.md...")
+    # Step 4: Generate ind_code from bctc_ind_name.json mapping
+    print("\n[4/5] Mapping ind_code from bctc_ind_name.json...")
 
-    # Load mapping from bctc.md
+    # Load mapping from bctc_ind_name.json
     import re
-    _mapping_file = Path(__file__).resolve().parent.parent / "bctc.md"
-    _ind_map = {}
+    _mapping_file = Path(__file__).resolve().parent.parent / "logic" / "bctc_ind_name.json"
+    _ind_map_exact = {}
+    _ind_map_norm = {}
+
+    def _norm_text(text: object) -> str:
+        s = "" if text is None else str(text).strip().lower()
+        return re.sub(r"\s+", " ", s)
+
     try:
         with open(_mapping_file, "r", encoding="utf-8") as f:
             for entry in json.load(f):
                 name = str(entry.get("ind_name", "")).strip()
                 code = str(entry.get("ind_code", "")).strip()
                 if name and code:
-                    _ind_map[name] = code
-        print(f"  Loaded {len(_ind_map)} mappings from bctc.md")
+                    _ind_map_exact[name] = code
+                    _ind_map_norm[_norm_text(name)] = code
+        print(f"  Loaded {len(_ind_map_exact)} mappings from bctc_ind_name.json")
     except Exception as exc:
-        print(f"  ⚠ Could not load bctc.md: {exc}")
+        print(f"  ⚠ Could not load bctc_ind_name.json: {exc}")
 
     def _get_ind_code(ind_name: str) -> str:
         name = str(ind_name).strip()
-        if name in _ind_map:
-            return _ind_map[name]
+        if name in _ind_map_exact:
+            return _ind_map_exact[name]
+        normed = _norm_text(name)
+        if normed in _ind_map_norm:
+            return _ind_map_norm[normed]
         # Fallback: slugify lowercase
         slug = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")
         return slug.lower() or "unknown"
