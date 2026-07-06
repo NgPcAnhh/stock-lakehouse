@@ -88,19 +88,45 @@ async def init_bi_db() -> None:
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS bi_hub;"))
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS system;"))
         
+        # 1.1. Tự động chạy file SQL khởi tạo bảng chat history
+        import os
+        migration_file = os.path.join(os.path.dirname(__file__), "migration_chat_history.sql")
+        if os.path.exists(migration_file):
+            with open(migration_file, "r", encoding="utf-8") as f:
+                sql_content = f.read()
+                # Tách các câu lệnh và thực thi
+                statements = [s.strip() for s in sql_content.split(";") if s.strip()]
+                for stmt in statements:
+                    await conn.execute(text(stmt))
+                    
         # Import toàn bộ model của BI để đăng ký vào Base.metadata
         import app.modules.bi.models.workspace
         import app.modules.bi.models.data_source
         import app.modules.bi.models.query
         import app.modules.bi.models.dataset
+        import app.modules.bi.models.dataset_folder
         import app.modules.bi.models.chart
         import app.modules.bi.models.dashboard
         import app.modules.bi.models.permission
         
         # 2. Tạo bảng
         await conn.run_sync(Base.metadata.create_all)
+
+        # 2.1. Kiểm tra cột folder_id trong bảng bi_hub.datasets, nếu chưa có thì ALTER TABLE
+        check_col = text("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_schema='bi_hub' AND table_name='datasets' AND column_name='folder_id'
+        """)
+        res_col = await conn.execute(check_col)
+        if not res_col.fetchone():
+            await conn.execute(text("""
+                ALTER TABLE bi_hub.datasets 
+                ADD COLUMN folder_id UUID REFERENCES bi_hub.dataset_folders(id) ON DELETE SET NULL;
+            """))
         
         # 3. Seed default workspace '00000000-0000-0000-0000-000000000000' nếu chưa có
+
         default_ws_id = "00000000-0000-0000-0000-000000000000"
         check_query = text("SELECT id FROM bi_hub.workspaces WHERE id = :id")
         result = await conn.execute(check_query, {"id": default_ws_id})

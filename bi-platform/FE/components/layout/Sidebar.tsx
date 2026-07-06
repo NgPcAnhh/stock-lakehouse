@@ -6,7 +6,7 @@ import {
     ChevronRight,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/AuthContext";
 import { useTracking } from "@/hooks/useTracking";
@@ -20,6 +20,7 @@ interface SidebarProps {
 
 export function Sidebar({ className, collapsed, onToggle }: SidebarProps) {
     const pathname = usePathname();
+    const searchParams = useSearchParams();
     const { sidebarItems } = useSettings();
     const { isAuthenticated, user, openAuthModal, logout } = useAuth();
     const { trackSidebarClick } = useTracking(user?.id);
@@ -69,12 +70,27 @@ export function Sidebar({ className, collapsed, onToggle }: SidebarProps) {
                             if (!isAuthenticated) return true;
                             // Admin bypasses permissions
                             if (user?.role === "admin") return true;
-                            // Filter by user permissions
+                            // Filter by user permissions (map charts/dashboards to hub)
+                            if (item.id === "charts" || item.id === "dashboards") {
+                                return user?.permissions?.includes("hub");
+                            }
                             return user?.permissions?.includes(item.id);
                         })
                         .map((item) => {
                             const IconComponent = SIDEBAR_ICON_MAP[item.iconName];
-                            const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
+                            
+                            // Check active state matching path + query params if present
+                            const hasQuery = item.href.includes("?");
+                            let isActive = false;
+                            if (hasQuery) {
+                                const [path, query] = item.href.split("?");
+                                const params = new URLSearchParams(query);
+                                const tab = params.get("tab");
+                                isActive = pathname === path && searchParams.get("tab") === tab;
+                            } else {
+                                isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
+                            }
+
                             return (
                                 <Link
                                     key={item.id}

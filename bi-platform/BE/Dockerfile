@@ -14,7 +14,7 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Cài đặt thư viện Python
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy toàn bộ source code
 COPY . .

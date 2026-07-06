@@ -13,8 +13,8 @@ dist/
 *.egg
 
 # Environment
-# .env
-# .env.*
+.env
+.env.*
 !.env.example
 
 # IDE

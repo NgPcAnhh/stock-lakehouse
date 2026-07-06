@@ -177,9 +177,7 @@ async def authenticate_user(
     await db.commit()
 
     # Ghi log đăng nhập
-    from app.modules.tracking.logic import track_login as _track_login
-    await _track_login(db, user_id=user.id, method="local", success=True,
-                       ip_address=ip_address, device_info=device_info)
+    pass
 
     return _build_auth_response(user, access, refresh, settings.ACCESS_TOKEN_EXPIRE_MINUTES)
 
@@ -240,9 +238,7 @@ async def verify_login_2fa(
     ))
     await db.commit()
 
-    from app.modules.tracking.logic import track_login as _track_login
-    await _track_login(db, user_id=user.id, method="local_2fa", success=True,
-                       ip_address=ip_address, device_info=device_info)
+    pass
 
     return _build_auth_response(user, access, refresh, settings.ACCESS_TOKEN_EXPIRE_MINUTES)
 
@@ -320,9 +316,7 @@ async def google_login_or_register(
     await db.commit()
 
     # Ghi log đăng nhập Google
-    from app.modules.tracking.logic import track_login as _track_login
-    await _track_login(db, user_id=user.id, method="google", success=True,
-                       ip_address=ip_address, device_info="Google OAuth")
+    pass
 
     return _build_auth_response(user, access, refresh, settings.ACCESS_TOKEN_EXPIRE_MINUTES)
 

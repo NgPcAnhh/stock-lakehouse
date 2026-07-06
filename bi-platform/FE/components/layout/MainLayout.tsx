@@ -8,7 +8,6 @@ import ScrollToTopButton from "./ScrollToTopButton";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/AuthContext";
 import { useSettings } from "@/lib/SettingsContext";
-import { useSessionTracking, usePageViewTracking, useErrorTracking } from "@/hooks/useTracking";
 import { Menu } from "lucide-react";
 
 export default function MainLayout({ children }: { children: React.ReactNode }) {
@@ -22,15 +21,8 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     const [isHoverSidebarVisible, setIsHoverSidebarVisible] = useState(false);
     const [hoverTimeout, setHoverTimeout] = useState<NodeJS.Timeout | null>(null);
 
-    const { isAuthenticated, isLoading, user, openAuthModal } = useAuth();
+    const { isAuthenticated, isLoading, openAuthModal } = useAuth();
     const { autoHideSidebar } = useSettings();
-
-    // Theo dõi thời gian phiên làm việc
-    useSessionTracking(user?.id);
-    // Tự động track page view khi route thay đổi
-    usePageViewTracking(user?.id);
-    // Tự động bắt lỗi JS runtime & promise rejections
-    useErrorTracking(user?.id);
 
     // Route Protection Guard
     useEffect(() => {
@@ -43,16 +35,14 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
         }
     }, [isLoading, isAuthenticated, pathname, router, openAuthModal]);
 
-    const hideSidebarFromUrl = searchParams.get("hideSidebar") === "true" || searchParams.get("preview") === "true";
+    const hasSidebarOverride = searchParams.get("sidebar") === "true";
+    const hideSidebarFromUrl = (searchParams.get("hideSidebar") === "true" || searchParams.get("preview") === "true") && !hasSidebarOverride;
     const hideHeaderFromUrl = searchParams.get("disable_header") === "true" || searchParams.get("preview") === "true";
 
     // logic xác định xem có nên dùng chế độ ẩn sidebar không
-    const useAutoHideMode = autoHideSidebar;
+    const useAutoHideMode = autoHideSidebar || hideSidebarFromUrl;
 
     const isBIHub = pathname.startsWith("/data-sources") || pathname.startsWith("/hub");
-    const isSettings = pathname === "/settings" || pathname.startsWith("/settings/");
-    const hideHeader = isBIHub || isSettings;
-    
     const hideScrollToTop = isBIHub;
 
     const isPreviewMode = searchParams.get("preview") === "true";
@@ -70,7 +60,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
         setHoverTimeout(timeout);
     };
 
-    if (hideSidebarFromUrl || (isBIHub && isPreviewMode)) {
+    if (isBIHub && isPreviewMode && !hasSidebarOverride) {
         const isSlideMode = layoutModeParam === 'slide';
         return (
             <div className="flex h-screen overflow-hidden bg-background">
@@ -101,7 +91,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                 </div>
             )}
 
-            {/* Desktop Hover Sidebar - Dành cho chế độ ẩn */}
+            {/* Desktop Hover Sidebar - Dành cho chế độ ẩn (Price board hoặc setting bật) */}
             {useAutoHideMode && (
                 <div 
                     className={cn(
@@ -135,10 +125,10 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
             </div>
 
             <div className="flex flex-col flex-1 overflow-hidden w-full transition-all duration-300">
-                {!hideHeader && <Header onMenuClick={() => setIsMobileMenuOpen(true)} />}
+                {!isBIHub && !hideHeaderFromUrl && <Header onMenuClick={() => setIsMobileMenuOpen(true)} />}
                 <main data-scroll-root="app" className="flex-1 overflow-y-auto scroll-smooth bg-muted/20">
                     <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 relative">
-                        {hideHeader && (
+                        {isBIHub && (
                             <button
                                 className="lg:hidden fixed top-4 left-4 z-40 p-2 bg-background/80 backdrop-blur border border-border rounded-full shadow-lg text-foreground hover:bg-muted"
                                 onClick={() => setIsMobileMenuOpen(true)}

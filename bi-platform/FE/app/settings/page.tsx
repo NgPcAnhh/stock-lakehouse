@@ -8,6 +8,7 @@ import {
 } from "@/lib/SettingsContext";
 import { useAuth } from "@/lib/AuthContext";
 import { fetchWithAuth } from "@/lib/auth";
+import { api } from "@/lib/api-client";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -38,11 +39,10 @@ import {
     Loader2,
     Monitor,
     MonitorOff,
-    ShieldAlert,
+    Plus,
+    Trash2,
 } from "lucide-react";
-import { useSearchParams, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { AdminSettingsContent } from "@/components/admin/AdminSettingsContent";
 
 const API = "http://localhost:8000/api/v1/auth";
 
@@ -602,35 +602,161 @@ function TwoFADisableDialog({ onClose, onSuccess }: { onClose: () => void; onSuc
     );
 }
 
+// ─── Add Custom Menu Dialog ───────────────────────────────────────────────────
+function AddCustomMenuDialog({
+    onClose,
+    onAdd,
+}: {
+    onClose: () => void;
+    onAdd: (name: string, dashboardId: string, iconName: string) => void;
+}) {
+    const [name, setName] = useState("");
+    const [dashboardId, setDashboardId] = useState("");
+    const [iconName, setIconName] = useState("LayoutDashboard");
+    const [dashboards, setDashboards] = useState<any[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState("");
+
+    useEffect(() => {
+        setLoading(true);
+        api.dashboards.list("00000000-0000-0000-0000-000000000000")
+            .then((data) => {
+                setDashboards(data || []);
+                if (data && data.length > 0) {
+                    setDashboardId(data[0].id);
+                }
+            })
+            .catch((err) => {
+                setError("Không thể tải danh sách dashboard. Hãy chắc chắn rằng bạn đã đăng nhập.");
+                console.error(err);
+            })
+            .finally(() => {
+                setLoading(false);
+            });
+    }, []);
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!name.trim()) {
+            setError("Vui lòng nhập tên hiển thị.");
+            return;
+        }
+        if (!dashboardId) {
+            setError("Vui lòng chọn dashboard.");
+            return;
+        }
+        onAdd(name.trim(), dashboardId, iconName);
+        onClose();
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white dark:bg-slate-900 shadow-2xl border border-slate-200 dark:border-slate-800 animate-in zoom-in-95 duration-200">
+                <div className="relative border-b border-slate-100 dark:border-slate-800 p-6 pb-4">
+                    <button onClick={onClose} className="absolute right-4 top-4 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
+                        <X size={18} />
+                    </button>
+                    <div className="flex items-center gap-2">
+                        <LayoutGrid className="size-5 text-primary" />
+                        <h2 className="text-xl font-bold text-foreground">Thêm Menu tùy chỉnh</h2>
+                    </div>
+                    <p className="text-sm text-muted-foreground mt-1">Gán một dashboard xây dựng sẵn lên thẳng Sidebar điều hướng.</p>
+                </div>
+
+                <form onSubmit={handleSubmit} className="p-6 space-y-4">
+                    {error && (
+                        <div className="rounded-lg bg-red-50 dark:bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400 border border-red-100 dark:border-red-500/20">
+                            {error}
+                        </div>
+                    )}
+
+                    <div className="space-y-1">
+                        <label className="text-sm font-medium text-foreground">Tên hiển thị trên menu</label>
+                        <input
+                            type="text"
+                            required
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all"
+                            placeholder="Ví dụ: Báo cáo kinh doanh, Xu hướng VIC..."
+                        />
+                    </div>
+
+                    <div className="space-y-1">
+                        <label className="text-sm font-medium text-foreground">Chọn Dashboard liên kết</label>
+                        {loading ? (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+                                <Loader2 className="size-4 animate-spin text-primary" /> Tải danh sách...
+                            </div>
+                        ) : dashboards.length === 0 ? (
+                            <div className="text-sm text-amber-500 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 p-2.5 rounded-lg">
+                                Không tìm thấy dashboard nào. Hãy tạo dashboard trong mục <span className="font-semibold">Trực quan dữ liệu</span> trước.
+                            </div>
+                        ) : (
+                            <select
+                                value={dashboardId}
+                                onChange={(e) => setDashboardId(e.target.value)}
+                                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all"
+                            >
+                                {dashboards.map((dash) => (
+                                    <option key={dash.id} value={dash.id}>
+                                        {dash.name}
+                                    </option>
+                                ))}
+                            </select>
+                        )}
+                    </div>
+
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium text-foreground">Chọn Icon hiển thị</label>
+                        <div className="grid grid-cols-5 gap-2 border border-border bg-muted/20 p-3 rounded-lg max-h-32 overflow-y-auto">
+                            {Object.entries(SIDEBAR_ICON_MAP).map(([key, Icon]) => {
+                                if (key === "Settings") return null;
+                                return (
+                                    <button
+                                        key={key}
+                                        type="button"
+                                        onClick={() => setIconName(key)}
+                                        className={cn(
+                                            "flex flex-col items-center justify-center p-2 rounded-lg border transition-all hover:bg-background",
+                                            iconName === key
+                                                ? "border-primary bg-background text-primary shadow-sm scale-105"
+                                                : "border-transparent text-muted-foreground hover:text-foreground"
+                                        )}
+                                        title={key}
+                                    >
+                                        <Icon className="size-5" />
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    <div className="flex gap-3 pt-2">
+                        <Button type="button" variant="outline" className="flex-1" onClick={onClose}>
+                            Hủy
+                        </Button>
+                        <Button type="submit" className="flex-1" disabled={loading || dashboards.length === 0 || !name.trim()}>
+                            Thêm menu
+                        </Button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+}
+
 
 // ─── Settings Page ─────────────────────────────────────────────────────────────
 export default function SettingsPage() {
-    const searchParams = useSearchParams();
-    const router = useRouter();
-    const initialTab = searchParams.get("tab") || "account";
-    const [activeTab, setActiveTab] = useState(initialTab);
-
     const {
-        darkMode, setDarkMode,        showPriceBoardPopup, setShowPriceBoardPopup,        autoHideSidebar, setAutoHideSidebar,        sidebarItems, moveSidebarItem, toggleSidebarItem, resetSidebarItems,
+        darkMode, setDarkMode,
+        showPriceBoardPopup, setShowPriceBoardPopup,
+        autoHideSidebar, setAutoHideSidebar,
+        sidebarItems, moveSidebarItem, toggleSidebarItem, resetSidebarItems,
+        addCustomSidebarItem, removeCustomSidebarItem,
     } = useSettings();
     const { user, isAuthenticated } = useAuth();
-    
-    // Sync tab with URL
-    const handleTabChange = (value: string) => {
-        setActiveTab(value);
-        const params = new URLSearchParams(searchParams.toString());
-        params.set("tab", value);
-        router.push(`/settings?${params.toString()}`, { scroll: false });
-    };
-
-    // Update active tab if URL changes externally
-    useEffect(() => {
-        const tab = searchParams.get("tab");
-        if (tab && tab !== activeTab) {
-            setActiveTab(tab);
-        }
-    }, [searchParams, activeTab]);
-
     const [currentPlan] = useState("free");
     const [upgradeSuccess, setUpgradeSuccess] = useState<string | null>(null);
 
@@ -638,6 +764,7 @@ export default function SettingsPage() {
     const [showChangePassword, setShowChangePassword] = useState(false);
     const [showSetup2FA, setShowSetup2FA] = useState(false);
     const [showDisable2FA, setShowDisable2FA] = useState(false);
+    const [showAddCustomMenu, setShowAddCustomMenu] = useState(false);
     const [is2FAEnabled, setIs2FAEnabled] = useState(user?.is_totp_enabled ?? false);
 
     const handleUpgrade = (planId: string) => {
@@ -656,24 +783,22 @@ export default function SettingsPage() {
     const isGoogleAccount = user?.auth_provider === "google";
 
     return (
-        <div className="max-w-4xl mx-auto px-4 pt-2 pb-12 space-y-4">
-            <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-4">
-                <TabsList className={cn(
-                    "grid w-full h-11",
-                    user?.role === "admin" ? "grid-cols-5" : "grid-cols-4"
-                )}>
+        <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
+            {/* Header */}
+            <div>
+                <h1 className="text-2xl font-bold tracking-tight text-foreground">Cài đặt</h1>
+                <p className="text-muted-foreground text-sm mt-1">
+                    Quản lý tài khoản, giao diện và tùy chọn hiển thị của bạn.
+                </p>
+            </div>
+
+            <Tabs defaultValue="account" className="space-y-6">
+                <TabsList className="grid w-full grid-cols-4 h-11">
                     <TabsTrigger value="account" className="gap-1.5 text-xs sm:text-sm">
                         <User className="size-3.5" />
                         <span className="hidden sm:inline">Tài khoản</span>
                         <span className="sm:hidden">TK</span>
                     </TabsTrigger>
-                    {user?.role === "admin" && (
-                        <TabsTrigger value="admin" className="gap-1.5 text-xs sm:text-sm text-red-500 data-[state=active]:text-red-600">
-                            <ShieldAlert className="size-3.5" />
-                            <span className="hidden sm:inline">Quản trị</span>
-                            <span className="sm:hidden">Admin</span>
-                        </TabsTrigger>
-                    )}
                     <TabsTrigger value="plans" className="gap-1.5 text-xs sm:text-sm">
                         <Crown className="size-3.5" />
                         <span className="hidden sm:inline">Gói dịch vụ</span>
@@ -690,13 +815,6 @@ export default function SettingsPage() {
                         <span className="sm:hidden">Bố cục</span>
                     </TabsTrigger>
                 </TabsList>
-
-                {/* ── Tab: Quản trị (Admin Only) ─────────────────────────── */}
-                {user?.role === "admin" && (
-                    <TabsContent value="admin" className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                        <AdminSettingsContent />
-                    </TabsContent>
-                )}
 
                 {/* ── Tab: Tài khoản ─────────────────────────────────────── */}
                 <TabsContent value="account" className="space-y-4">
@@ -967,17 +1085,28 @@ export default function SettingsPage() {
                 {/* ── Tab: Bố cục — Sidebar nav items ──────────────────── */}
                 <TabsContent value="layout" className="space-y-4">
                     <Card className="p-6 space-y-4">
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between flex-wrap gap-2">
                             <div className="space-y-1">
                                 <h3 className="font-semibold text-foreground">Menu điều hướng (Sidebar)</h3>
                                 <p className="text-sm text-muted-foreground">
-                                    Ẩn/hiện và sắp xếp thứ tự các mục trong sidebar. Thay đổi lưu tự động.
+                                    Ẩn/hiện, sắp xếp thứ tự hoặc tạo menu liên kết dashboard tùy chỉnh.
                                 </p>
                             </div>
-                            <Button variant="outline" size="sm" onClick={resetSidebarItems} className="gap-1.5 shrink-0">
-                                <RefreshCcw className="size-3.5" />
-                                Đặt lại
-                            </Button>
+                            <div className="flex items-center gap-2 shrink-0">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setShowAddCustomMenu(true)}
+                                    className="gap-1.5 border-primary text-primary hover:bg-primary/10 shrink-0"
+                                >
+                                    <Plus className="size-3.5" />
+                                    Thêm Menu
+                                </Button>
+                                <Button variant="outline" size="sm" onClick={resetSidebarItems} className="gap-1.5 shrink-0">
+                                    <RefreshCcw className="size-3.5" />
+                                    Đặt lại
+                                </Button>
+                            </div>
                         </div>
 
                         <Separator />
@@ -1042,6 +1171,21 @@ export default function SettingsPage() {
                                             )} />
                                         </button>
 
+                                        {/* Delete custom item */}
+                                        {item.isCustom && (
+                                            <button
+                                                onClick={() => {
+                                                    if (confirm(`Bạn có chắc chắn muốn xóa menu tùy chỉnh "${item.name}" không?`)) {
+                                                        removeCustomSidebarItem(item.id);
+                                                    }
+                                                }}
+                                                title="Xóa menu tùy chỉnh"
+                                                className="p-1 rounded hover:bg-red-50 dark:hover:bg-red-500/10 text-red-500 transition-colors shrink-0"
+                                            >
+                                                <Trash2 className="size-4" />
+                                            </button>
+                                        )}
+
                                         {/* Move up/down */}
                                         <div className="flex flex-col gap-0.5 shrink-0">
                                             <button
@@ -1085,6 +1229,14 @@ export default function SettingsPage() {
                 <TwoFADisableDialog
                     onClose={() => setShowDisable2FA(false)}
                     onSuccess={() => setIs2FAEnabled(false)}
+                />
+            )}
+            {showAddCustomMenu && (
+                <AddCustomMenuDialog
+                    onClose={() => setShowAddCustomMenu(false)}
+                    onAdd={(name, dashboardId, iconName) => {
+                        addCustomSidebarItem(name, dashboardId, iconName);
+                    }}
                 />
             )}
         </div>

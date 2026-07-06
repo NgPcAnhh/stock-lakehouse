@@ -66,7 +66,8 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
 @router.post("/login")
 async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """Đăng nhập bằng email + password. Trả về tokens hoặc yêu cầu 2FA."""
-    from app.modules.tracking.logic import track_login as _track_login
+    async def _track_login(*args, **kwargs):
+        pass
 
     ip = _client_ip(request)
     device = request.headers.get("user-agent", "")

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 import uuid
@@ -14,7 +14,10 @@ async def create_dataset(
     req: schemas.DatasetCreate,
     db: AsyncSession = Depends(get_db)
 ):
-    return await service.create_dataset(db, req)
+    try:
+        return await service.create_dataset(db, req)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/workspace/{workspace_id}", response_model=List[schemas.DatasetResponse])
 async def list_datasets(
@@ -26,9 +29,25 @@ async def list_datasets(
 @router.post("/{dataset_id}/preview", response_model=schemas.DatasetPreviewResponse)
 async def preview_dataset(
     dataset_id: uuid.UUID,
+    response: Response,
+    limit: int = 100000,
     db: AsyncSession = Depends(get_db)
 ):
-    return await service.preview_dataset(db, dataset_id)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return await service.preview_dataset(db, dataset_id, limit=limit)
+
+@router.post("/{dataset_id}/export", response_model=schemas.DatasetPreviewResponse)
+async def export_dataset(
+    dataset_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        return await service.export_dataset(db, dataset_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 @router.put("/{dataset_id}", response_model=schemas.DatasetResponse)
 async def update_dataset(
@@ -36,10 +55,13 @@ async def update_dataset(
     req: schemas.DatasetUpdate,
     db: AsyncSession = Depends(get_db)
 ):
-    res = await service.update_dataset(db, dataset_id, req)
-    if not res:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    return res
+    try:
+        res = await service.update_dataset(db, dataset_id, req)
+        if not res:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        return res
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.delete("/{dataset_id}")
 async def delete_dataset(
@@ -61,3 +83,30 @@ async def import_excel(
         return await service.import_excel(db, req)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+# ── Folders Routes ──
+
+@router.post("/folders", response_model=schemas.FolderResponse)
+async def create_folder(
+    req: schemas.FolderCreate,
+    db: AsyncSession = Depends(get_db)
+):
+    return await service.create_folder(db, req)
+
+@router.get("/folders/workspace/{workspace_id}", response_model=List[schemas.FolderResponse])
+async def list_folders(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db)
+):
+    return await service.get_folders(db, workspace_id)
+
+@router.delete("/folders/{folder_id}")
+async def delete_folder(
+    folder_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db)
+):
+    success = await service.delete_folder(db, folder_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    return {"status": "success", "message": "Folder deleted"}
+

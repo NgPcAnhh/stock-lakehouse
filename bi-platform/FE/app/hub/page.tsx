@@ -63,6 +63,7 @@ import { useAuth } from "@/lib/AuthContext";
 
 const EChartRenderer = dynamic(() => import("@/components/charts/EChartRenderer"), { ssr: false });
 const WORKSPACE_ID = "00000000-0000-0000-0000-000000000000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
 
 interface GlobalFilter {
@@ -355,6 +356,7 @@ const applyOperator = (rowVal: any, filterVal: any, op: string): boolean => {
 export default function BIHubPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const isSidebarEmbedded = searchParams.get('sidebar') === 'true';
   const { user: currentUser } = useAuth();
   const [isPreviewMode, setIsPreviewMode] = useState(false);
   const [isHeaderDisabled, setIsHeaderDisabled] = useState(false);
@@ -386,7 +388,7 @@ export default function BIHubPage() {
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [selectedWidgetIds, setSelectedWidgetIds] = useState<string[]>([]);
   const [selectionBox, setSelectionBox] = useState<{ x1: number, y1: number, x2: number, y2: number } | null>(null);
-  const [interactionMode, setInteractionMode] = useState<"select" | "pan">("select");
+  const [interactionMode, setInteractionMode] = useState<"select" | "pan">("pan");
 
   // History for Undo
   const [history, setHistory] = useState<{ items: any[], widgets: any[], frames: any[] }[]>([]);
@@ -455,8 +457,25 @@ export default function BIHubPage() {
 
   // BI Hub State
   const [activeTab, setActiveTab] = useState<"dashboards" | "charts">("dashboards");
+  
+  const tabParam = searchParams.get("tab");
+  useEffect(() => {
+    if (tabParam === "charts" || tabParam === "dashboards") {
+      setActiveTab(tabParam);
+    }
+  }, [tabParam]);
+
   const [view, setView] = useState<"list" | "edit-dashboard" | "edit-chart" | "create-chart">("list");
   const [loading, setLoading] = useState(true);
+
+  // List View Pagination & Search state
+  const [listSearchQuery, setListSearchQuery] = useState("");
+  const [listPage, setListPage] = useState(1);
+  const ITEMS_PER_PAGE = 9;
+
+  useEffect(() => {
+    setListPage(1);
+  }, [activeTab, listSearchQuery]);
 
   // Asset lists
   const [dashboards, setDashboards] = useState<any[]>([]);
@@ -532,7 +551,33 @@ export default function BIHubPage() {
     initialPositions: []
   });
   const [showAddChart, setShowAddChart] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<'add' | 'manage'>('add');
+  const [sidebarTab, setSidebarTab] = useState<'add' | 'manage' | 'datasets'>('add');
+  const [showDatasetModal, setShowDatasetModal] = useState(false);
+  const [selectedEditingDataset, setSelectedEditingDataset] = useState<any | null>(null);
+
+  const uniqueDatasets = useMemo(() => {
+    const list: any[] = [];
+    const seenIds = new Set<string>();
+    dashboardItems.forEach(item => {
+      if (item.chart?.dataset_id) {
+        const id = item.chart.dataset_id;
+        if (!seenIds.has(id)) {
+          seenIds.add(id);
+          const found = datasets.find(d => d.id === id);
+          if (found) {
+            list.push(found);
+          } else {
+            list.push({
+              id,
+              name: item.chart.dataset_name || `Dataset ${id.slice(0, 8)}`,
+              description: "Dataset used in dashboard chart"
+            });
+          }
+        }
+      }
+    });
+    return list;
+  }, [dashboardItems, datasets]);
 
   // Permission system state
   const [chartPermissions, setChartPermissions] = useState<Record<string, number[]>>({}); 
@@ -651,8 +696,7 @@ export default function BIHubPage() {
         
         for (const datasetId of uniqueDatasetIds) {
           try {
-            const res = await fetch(`http://localhost:8000/api/v1/datasets/${datasetId}/preview`, { method: "POST" });
-            const data = await res.json();
+            const data = await api.datasets.preview(datasetId);
             
             setDashboardItems(prev => prev.map(item => {
               if (item.chart?.dataset_id === datasetId && chartIds.includes(item.chart.id)) {
@@ -981,7 +1025,11 @@ export default function BIHubPage() {
   const [xEncoding, setXEncoding] = useState("");
   const [yEncoding, setYEncoding] = useState("");
   const [isSchemaExpanded, setIsSchemaExpanded] = useState(true);
-  const [showChartPreview, setShowChartPreview] = useState(false);
+  const [previewMode, setPreviewMode] = useState<"table" | "chart" | "ai">("table");
+  const [tablePage, setTablePage] = useState(1);
+  const [tablePageSize, setTablePageSize] = useState(10);
+  const [tableSearchQuery, setTableSearchQuery] = useState("");
+  const [tableZoom, setTableZoom] = useState<number>(100);
   // Auto generate template code on new chart dataset load
   useEffect(() => {
     if (datasetPreview?.rows && !editingChartId && !echartsCode) {
@@ -1025,6 +1073,39 @@ export default function BIHubPage() {
       }
     });
   }, []);
+
+  // Listen to searchParams changes to support routing between dashboards in preview mode
+  useEffect(() => {
+    const isPreview = searchParams.get('preview') === 'true';
+    const dashId = searchParams.get('dashboardId');
+    const isHeaderDisabledParam = searchParams.get('disable_header') === 'true';
+
+    if (isHeaderDisabledParam) {
+      setIsHeaderDisabled(true);
+    } else {
+      setIsHeaderDisabled(false);
+    }
+
+    if (isPreview && dashId) {
+      if (dashboards.length > 0) {
+        const dashboard = dashboards.find((d: any) => d.id === dashId);
+        if (dashboard) {
+          setIsPreviewMode(true);
+          const urlOverrides = {
+            mainFrameId: searchParams.get('mainFrameId'),
+            tabId: searchParams.get('tabId')
+          };
+          handleOpenDashboard(dashboard, urlOverrides);
+          setIsEditMode(false);
+          setView("edit-dashboard");
+        }
+      }
+    } else if (view === "edit-dashboard" && isPreviewMode) {
+      setIsPreviewMode(false);
+      setView("list");
+      setSelectedDashboard(null);
+    }
+  }, [searchParams, dashboards]);
 
   // ==========================================
   // DASHBOARD LAYOUT & VIEW LOGIC
@@ -1328,7 +1409,7 @@ export default function BIHubPage() {
   // In whiteboard + pan mode, or slide + Ctrl:
   //   - Always zooms (existing behaviour)
   const handleWheel = (e: React.WheelEvent) => {
-    if (isPreviewMode && mainFrameId) return;
+    if (isPreviewMode) return;
 
     const isWhiteboardSelect = layoutMode === 'whiteboard' && interactionMode === 'select';
     const isSlideCtrl = layoutMode === 'slide' && e.ctrlKey;
@@ -1376,7 +1457,7 @@ export default function BIHubPage() {
 
   // Background panning & selection (click-drag on empty space, or spacebar+drag)
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
-    if (isPreviewMode && mainFrameId) return;
+    if (isPreviewMode) return;
 
     const rect = gridContainerRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -1543,7 +1624,14 @@ export default function BIHubPage() {
   const loadChartDatasetPreview = async (id: string) => {
     try {
       setDatasetPreview(null);
-      const res = await fetch(`http://localhost:8000/api/v1/datasets/${id}/preview`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/datasets/${id}/preview`, {
+        method: "POST",
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        }
+      });
       const data = await res.json();
       setDatasetPreview(data);
       if (data.columns && data.columns.length > 0) {
@@ -1696,7 +1784,14 @@ export default function BIHubPage() {
 
   const fetchDatasetPreview = async (datasetId: string) => {
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/datasets/${datasetId}/preview`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/datasets/${datasetId}/preview`, {
+        method: "POST",
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        }
+      });
       const data = await res.json();
       return data.rows || [];
     } catch (err) {
@@ -2661,7 +2756,8 @@ if (element) {
       echarts_option: evalResult.option,
       transform_config: { 
         code: editDashboardChartCode,
-        filter_config: directEditorFilterConfig
+        filter_config: directEditorFilterConfig,
+        display_mode: chart.transform_config?.display_mode
       }
     };
 
@@ -3111,7 +3207,9 @@ if (element) {
     setEvalSuccess(true);
     setEvaluatedOption(chart.echarts_option || {});
     setChartConfigTab("schema");
-    setShowChartPreview(true);
+    const savedMode = chart.transform_config?.display_mode === "table" ? "table" : "chart";
+    setPreviewMode(savedMode);
+    setTableZoom(chart.transform_config?.table_zoom || 100);
 
     // Reset AI Agent state
     setIsFirstAiGen(true);
@@ -3141,7 +3239,10 @@ if (element) {
     setEvalSuccess(false);
     setEvaluatedOption({});
     setDatasetPreview(null);
-    setShowChartPreview(false);
+    setPreviewMode("table");
+    setTablePage(1);
+    setTableSearchQuery("");
+    setTableZoom(100);
     // Reset AI Agent state for fresh start
     setIsFirstAiGen(true);
     setAiHistory([]);
@@ -3175,7 +3276,7 @@ if (element) {
       setEvaluatedOption(evalResult.option);
       setEvalError(null);
       setEvalSuccess(true);
-      setShowChartPreview(true);
+      setPreviewMode("chart");
     }
   };
 
@@ -3238,7 +3339,7 @@ if (element) {
         setEvaluatedOption(evalResult.option);
         setEvalError(null);
         setEvalSuccess(true);
-        setShowChartPreview(true);
+        setPreviewMode("chart");
       }
 
       // Mark as not first gen anymore
@@ -3308,7 +3409,11 @@ if (element) {
       chart_type: "custom",
       encodings: {},
       echarts_option: evalResult.option,
-      transform_config: { code: echartsCode }
+      transform_config: { 
+        code: echartsCode,
+        display_mode: previewMode === "table" ? "table" : "chart",
+        table_zoom: tableZoom
+      }
     };
 
     try {
@@ -3371,6 +3476,37 @@ if (element) {
     echartsOption: evaluatedOption
   };
 
+  // ITEMS_PER_PAGE is defined at the component level
+
+  const processedDashboards = (dashboards || []).filter(dashboard => {
+    if ((currentUser as any)?.role !== 'admin' && dashboard.items && dashboard.items.length > 0) {
+      if (!dashboard.items.some((item: any) => hasChartPermission(item.chart_id))) return false;
+    }
+    if (listSearchQuery) {
+      const q = listSearchQuery.toLowerCase();
+      const matchName = dashboard.name ? dashboard.name.toLowerCase().includes(q) : false;
+      const matchDesc = dashboard.description ? dashboard.description.toLowerCase().includes(q) : false;
+      if (!matchName && !matchDesc) return false;
+    }
+    return true;
+  }).sort((a, b) => new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime());
+
+  const processedCharts = (charts || []).filter(chart => {
+    if (listSearchQuery) {
+      const q = listSearchQuery.toLowerCase();
+      const matchName = chart.name ? chart.name.toLowerCase().includes(q) : false;
+      const matchDesc = chart.description ? chart.description.toLowerCase().includes(q) : false;
+      if (!matchName && !matchDesc) return false;
+    }
+    return true;
+  }).sort((a, b) => new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime());
+
+  const displayedDashboards = processedDashboards.slice((listPage - 1) * ITEMS_PER_PAGE, listPage * ITEMS_PER_PAGE);
+  const totalDashboardPages = Math.max(1, Math.ceil(processedDashboards.length / ITEMS_PER_PAGE));
+
+  const displayedCharts = processedCharts.slice((listPage - 1) * ITEMS_PER_PAGE, listPage * ITEMS_PER_PAGE);
+  const totalChartPages = Math.max(1, Math.ceil(processedCharts.length / ITEMS_PER_PAGE));
+
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-50 flex flex-col">
       {view === "list" && (
@@ -3379,14 +3515,46 @@ if (element) {
           <div className="flex justify-between items-center mb-8">
             <div>
               <h1 className="text-4xl font-extrabold tracking-tight flex items-center gap-3">
-                <Archive className="text-orange-500 animate-pulse" />
-                Trực quan hóa
+                {tabParam === "charts" ? (
+                  <>
+                    <BarChart3 className="text-orange-500 animate-pulse" />
+                    Kho biểu đồ
+                  </>
+                ) : tabParam === "dashboards" ? (
+                  <>
+                    <LayoutDashboard className="text-orange-500 animate-pulse" />
+                    Dashboard
+                  </>
+                ) : (
+                  <>
+                    <Archive className="text-orange-500 animate-pulse" />
+                    Trực quan hóa
+                  </>
+                )}
               </h1>
-              <p className="text-neutral-400 mt-2">Manage datasets, build charts, and orchestrate visual dashboards.</p>
+              <p className="text-neutral-400 mt-2">
+                {tabParam === "charts" 
+                  ? "Tạo và quản lý các biểu đồ phân tích trực quan."
+                  : tabParam === "dashboards"
+                    ? "Thiết kế và tổ chức các báo cáo, bảng dữ liệu trực quan."
+                    : "Manage datasets, build charts, and orchestrate visual dashboards."}
+              </p>
             </div>
 
             {/* Contextual Action Button based on Tab */}
-            <div>
+            <div className="flex flex-col md:flex-row items-center gap-4">
+              {view === "list" && (
+                <div className="relative w-full md:w-64">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
+                  <input
+                    type="text"
+                    placeholder="Tìm kiếm..."
+                    value={listSearchQuery}
+                    onChange={(e) => setListSearchQuery(e.target.value)}
+                    className="w-full bg-neutral-900 border border-neutral-800 rounded-xl py-2 pl-9 pr-4 text-sm focus:border-orange-500 focus:ring-1 focus:ring-orange-500 outline-none transition-all"
+                  />
+                </div>
+              )}
               {activeTab === "dashboards" && (
                 <button
                   onClick={() => setShowCreateDashModal(true)}
@@ -3409,34 +3577,36 @@ if (element) {
           </div>
 
           {/* Navigation Tabs */}
-          <div className="flex border-b border-neutral-800 mb-8 bg-neutral-900/10 p-1.5 rounded-xl gap-2 w-max shadow-inner">
-            <button
-              onClick={() => setActiveTab("dashboards")}
-              className={`flex items-center gap-2 px-6 py-3 rounded-lg font-medium transition-all duration-200 ${activeTab === "dashboards"
-                ? "bg-orange-600 text-white shadow"
-                : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50"
-                }`}
-            >
-              <LayoutDashboard className="w-4 h-4" />
-              Dashboards
-              <span className={`ml-2 px-2 py-0.5 rounded-full text-xs font-semibold ${activeTab === "dashboards" ? "bg-orange-700 text-white" : "bg-neutral-800 text-neutral-400"}`}>
-                {dashboards.length}
-              </span>
-            </button>
-            <button
-              onClick={() => setActiveTab("charts")}
-              className={`flex items-center gap-2 px-6 py-3 rounded-lg font-medium transition-all duration-200 ${activeTab === "charts"
-                ? "bg-orange-600 text-white shadow"
-                : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50"
-                }`}
-            >
-              <BarChart3 className="w-4 h-4" />
-              Charts
-              <span className={`ml-2 px-2 py-0.5 rounded-full text-xs font-semibold ${activeTab === "charts" ? "bg-orange-700 text-white" : "bg-neutral-800 text-neutral-400"}`}>
-                {charts.length}
-              </span>
-            </button>
-          </div>
+          {!tabParam && (
+            <div className="flex border-b border-neutral-800 mb-8 bg-neutral-900/10 p-1.5 rounded-xl gap-2 w-max shadow-inner">
+              <button
+                onClick={() => setActiveTab("dashboards")}
+                className={`flex items-center gap-2 px-6 py-3 rounded-lg font-medium transition-all duration-200 ${activeTab === "dashboards"
+                  ? "bg-orange-600 text-white shadow"
+                  : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50"
+                  }`}
+              >
+                <LayoutDashboard className="w-4 h-4" />
+                Dashboards
+                <span className={`ml-2 px-2 py-0.5 rounded-full text-xs font-semibold ${activeTab === "dashboards" ? "bg-orange-700 text-white" : "bg-neutral-800 text-neutral-400"}`}>
+                  {dashboards.length}
+                </span>
+              </button>
+              <button
+                onClick={() => setActiveTab("charts")}
+                className={`flex items-center gap-2 px-6 py-3 rounded-lg font-medium transition-all duration-200 ${activeTab === "charts"
+                  ? "bg-orange-600 text-white shadow"
+                  : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50"
+                  }`}
+              >
+                <BarChart3 className="w-4 h-4" />
+                Charts
+                <span className={`ml-2 px-2 py-0.5 rounded-full text-xs font-semibold ${activeTab === "charts" ? "bg-orange-700 text-white" : "bg-neutral-800 text-neutral-400"}`}>
+                  {charts.length}
+                </span>
+              </button>
+            </div>
+          )}
 
           {/* Tab content wrapper */}
           <div className="flex-1">
@@ -3460,12 +3630,9 @@ if (element) {
                   </button>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {dashboards.filter(dashboard => {
-                    if ((currentUser as any)?.role === 'admin') return true;
-                    if (!dashboard.items || dashboard.items.length === 0) return true;
-                    return dashboard.items.some((item: any) => hasChartPermission(item.chart_id));
-                  }).map(dashboard => (
+                <div className="flex flex-col gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {displayedDashboards.map(dashboard => (
                     <div
                       key={dashboard.id}
                       onClick={() => handleOpenDashboard(dashboard)}
@@ -3502,7 +3669,29 @@ if (element) {
                         </span>
                       </div>
                     </div>
-                  ))}
+                    ))}
+                  </div>
+                  {totalDashboardPages > 1 && (
+                    <div className="flex justify-center items-center gap-4 mt-4">
+                      <button
+                        onClick={() => setListPage(p => Math.max(1, p - 1))}
+                        disabled={listPage === 1}
+                        className="p-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-400 hover:bg-neutral-800 hover:text-white hover:border-orange-500/50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                      >
+                        <ChevronLeft className="w-5 h-5" />
+                      </button>
+                      <span className="text-neutral-400 text-sm font-medium">
+                        Trang {listPage} / {totalDashboardPages}
+                      </span>
+                      <button
+                        onClick={() => setListPage(p => Math.min(totalDashboardPages, p + 1))}
+                        disabled={listPage === totalDashboardPages}
+                        className="p-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-400 hover:bg-neutral-800 hover:text-white hover:border-orange-500/50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                      >
+                        <ChevronRight className="w-5 h-5" />
+                      </button>
+                    </div>
+                  )}
                 </div>
               )
             ) : (
@@ -3521,9 +3710,10 @@ if (element) {
                   </button>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {charts.map(chart => (
-                    <div
+                <div className="flex flex-col gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {displayedCharts.map(chart => (
+                      <div
                       key={chart.id}
                       onClick={() => handleOpenChartForEdit(chart)}
                       className="bg-neutral-900/60 border border-neutral-800 rounded-2xl p-6 hover:border-orange-500/50 hover:bg-neutral-900/90 transition-all duration-250 cursor-pointer shadow-lg hover:shadow-2xl group flex flex-col justify-between h-44"
@@ -3561,7 +3751,29 @@ if (element) {
                         </span>
                       </div>
                     </div>
-                  ))}
+                    ))}
+                  </div>
+                  {totalChartPages > 1 && (
+                    <div className="flex justify-center items-center gap-4 mt-4">
+                      <button
+                        onClick={() => setListPage(p => Math.max(1, p - 1))}
+                        disabled={listPage === 1}
+                        className="p-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-400 hover:bg-neutral-800 hover:text-white hover:border-orange-500/50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                      >
+                        <ChevronLeft className="w-5 h-5" />
+                      </button>
+                      <span className="text-neutral-400 text-sm font-medium">
+                        Trang {listPage} / {totalChartPages}
+                      </span>
+                      <button
+                        onClick={() => setListPage(p => Math.min(totalChartPages, p + 1))}
+                        disabled={listPage === totalChartPages}
+                        className="p-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-400 hover:bg-neutral-800 hover:text-white hover:border-orange-500/50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                      >
+                        <ChevronRight className="w-5 h-5" />
+                      </button>
+                    </div>
+                  )}
                 </div>
               )
             )}
@@ -3574,7 +3786,7 @@ if (element) {
           ========================================== */}
       {view === "edit-dashboard" && selectedDashboard && (
         <div 
-          className={`flex-1 flex flex-col ${(isPreviewMode && layoutMode === 'whiteboard') ? 'fixed inset-0 z-[100]' : ''}`}
+          className={`flex-1 flex flex-col ${(isPreviewMode && layoutMode === 'whiteboard' && !isSidebarEmbedded) ? 'fixed inset-0 z-[100]' : ''}`}
           style={isPreviewMode ? {
             backgroundColor: (mainFrameId 
               ? (dashboardFrames.find(f => f.id === mainFrameId)?.bgColor || dashboardWidgets.find(w => w.id === mainFrameId)?.bgColor || selectedDashboard?.theme_config?.canvasBg || '#f8f9fa') 
@@ -3584,11 +3796,11 @@ if (element) {
           {/* Hide the global scroll-to-top button which overlaps with dashboard controls */}
           <style dangerouslySetInnerHTML={{ __html: `
             .scroll-to-top-button { display: none !important; }
-            ${(isPreviewMode && layoutMode === 'whiteboard') ? 'body { overflow: hidden !important; }' : ''}
+            ${(isPreviewMode && layoutMode === 'whiteboard' && !isSidebarEmbedded) ? 'body { overflow: hidden !important; }' : ''}
           ` }} />
           {/* Dashboard Header */}
           {!isHeaderDisabled && !isPreviewMode && (
-            <div className="h-20 border-b border-neutral-800 bg-neutral-900/60 flex items-center justify-between px-8 backdrop-blur-md sticky top-0 z-20 shrink-0">
+            <div className="h-20 border-b border-neutral-800 bg-neutral-900/60 flex items-center justify-between px-8 backdrop-blur-md sticky top-0 z-40 shrink-0">
               <div className="flex items-center gap-4">
                 <button
                   onClick={() => {
@@ -3696,18 +3908,6 @@ if (element) {
                       <Palette className="w-4 h-4 text-pink-400" /> Template
                     </button>
 
-                    <button
-                      onClick={() => {
-                        setShowAddChart(true);
-                        setShowTemplateSettings(false);
-                        setShowWidgetStyleModal(false);
-                        setShowTabSettings(false);
-                      }}
-                      className="flex items-center gap-2 bg-neutral-900 border border-neutral-800 hover:bg-neutral-800 text-neutral-300 hover:text-neutral-50 px-4 py-2 rounded-xl text-sm font-semibold transition-colors cursor-pointer"
-                    >
-                      <BarChart3 className="w-4 h-4" /> Add Chart
-                    </button>
-
                     {/* Add Element Dropdown */}
                     <div className="relative" ref={addElementDropdownRef}>
                       <button
@@ -3718,11 +3918,17 @@ if (element) {
                         <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showAddElementDropdown ? 'rotate-180' : ''}`} />
                       </button>
                       {showAddElementDropdown && (
-                        <div className="absolute right-0 top-full mt-2 w-52 max-h-[480px] overflow-y-auto bg-neutral-900 border border-neutral-800 rounded-2xl shadow-2xl z-50 animate-in fade-in slide-in-from-top-1 duration-150 custom-scrollbar">
-                          <div className="px-3 py-2 border-b border-neutral-800 sticky top-0 bg-neutral-900 z-10">
+                        <div className="absolute right-0 top-full mt-2 w-56 max-h-[350px] overflow-y-auto bg-neutral-900 border border-neutral-800 rounded-2xl shadow-2xl z-[9999] animate-in fade-in slide-in-from-top-1 duration-150 custom-scrollbar">
+                          <div className="px-3 py-2 border-b border-neutral-800">
                             <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">Dashboard Actions</span>
                           </div>
                           {([
+                            { 
+                              type: 'action_chart', 
+                              icon: <BarChart3 className="w-4 h-4" />, 
+                              label: 'Add Chart', 
+                              desc: 'Add interactive chart to canvas' 
+                            },
                             { 
                               type: 'action_tab', 
                               icon: <LayoutDashboard className="w-4 h-4" />, 
@@ -3736,7 +3942,12 @@ if (element) {
                             <button
                               key={item.type}
                               onClick={() => {
-                                if (item.type === 'action_tab') {
+                                if (item.type === 'action_chart') {
+                                  setShowAddChart(true);
+                                  setShowTemplateSettings(false);
+                                  setShowWidgetStyleModal(false);
+                                  setShowTabSettings(false);
+                                } else if (item.type === 'action_tab') {
                                   if (dashboardTabs.length > 1) {
                                     setShowTabSettings(true);
                                   } else {
@@ -3765,7 +3976,7 @@ if (element) {
                               </div>
                             </button>
                           ))}
-                          <div className="px-3 py-2 border-b border-neutral-800 bg-neutral-900/50 sticky top-[133px] z-10">
+                          <div className="px-3 py-2 border-b border-neutral-800 bg-neutral-900/50">
                             <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">Visual Elements</span>
                           </div>
                           {([
@@ -4415,6 +4626,39 @@ if (element) {
                                   <p className="text-sm font-semibold text-neutral-400">No Permission</p>
                                   <p className="text-xs text-neutral-500 mt-1 max-w-[200px]">You don't have access to view this chart's data.</p>
                                 </div>
+                              ) : item.chart.transform_config?.display_mode === "table" ? (
+                                <div className="w-full h-full overflow-auto max-w-full max-h-full">
+                                  <table className="min-w-full text-left border-collapse" style={{ fontSize: `${(item.chart.transform_config?.table_zoom ?? 100) * 11 / 100}px` }}>
+                                    <thead className="sticky top-0 bg-neutral-900 z-10 shadow-sm">
+                                      <tr className="border-b border-neutral-800">
+                                        <th className="px-3 py-2 text-neutral-400 font-bold uppercase tracking-wider whitespace-nowrap bg-neutral-900 w-10">#</th>
+                                        {filteredData && filteredData.length > 0 && Object.keys(filteredData[0]).map((col) => (
+                                          <th key={col} className="px-3 py-2 text-neutral-400 font-bold uppercase tracking-wider whitespace-nowrap bg-neutral-900 min-w-[120px]">{col}</th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {filteredData && filteredData.length > 0 ? (
+                                        filteredData.map((row: any, rIdx: number) => (
+                                          <tr key={rIdx} className="border-b border-neutral-850/50 hover:bg-neutral-900/30 transition-colors">
+                                            <td className="px-3 py-1.5 text-neutral-500 font-mono">{rIdx + 1}</td>
+                                            {Object.keys(row).map((col) => (
+                                              <td key={col} className="px-3 py-1.5 text-neutral-300 truncate max-w-[200px]" title={String(row[col])}>
+                                                {String(row[col])}
+                                              </td>
+                                            ))}
+                                          </tr>
+                                        ))
+                                      ) : (
+                                        <tr>
+                                          <td colSpan={filteredData && filteredData.length > 0 ? Object.keys(filteredData[0]).length + 1 : 1} className="px-3 py-4 text-center text-neutral-500">
+                                            No data available
+                                          </td>
+                                        </tr>
+                                      )}
+                                    </tbody>
+                                  </table>
+                                </div>
                               ) : (
                                 <EChartRenderer config={config} data={filteredData} />
                               )}
@@ -5047,8 +5291,9 @@ if (element) {
             )}
           </div>
 
+          {/* Tab Settings Drawer */}
           {showTabSettings && (
-            <div className="fixed inset-y-0 right-0 w-96 bg-neutral-900 border-l border-neutral-800 shadow-2xl z-[60] flex flex-col animate-in slide-in-from-right duration-200">
+            <div className={`fixed ${isHeaderDisabled || isPreviewMode ? 'top-0' : 'top-20'} bottom-0 right-0 w-96 bg-neutral-900 border-l border-neutral-800 shadow-2xl z-30 flex flex-col animate-in slide-in-from-right duration-200`}>
               <div className="flex justify-between items-center p-6 border-b border-neutral-800 shrink-0">
                 <h3 className="font-bold text-lg flex items-center gap-2">
                   <LayoutDashboard className="w-5 h-5 text-orange-500" /> Tab Settings
@@ -5524,7 +5769,7 @@ if (element) {
           )}
 
           {showAddChart && (
-            <div ref={addChartRef} className="fixed inset-y-0 right-0 w-96 bg-neutral-900 border-l border-neutral-800 shadow-2xl z-[60] flex flex-col animate-in slide-in-from-right duration-200">
+            <div ref={addChartRef} className={`fixed ${isHeaderDisabled || isPreviewMode ? 'top-0' : 'top-20'} bottom-0 right-0 w-96 bg-neutral-900 border-l border-neutral-800 shadow-2xl z-30 flex flex-col animate-in slide-in-from-right duration-200`}>
               {/* Sidebar Header */}
               <div className="flex justify-between items-center p-4 border-b border-neutral-800 shrink-0">
                 <h3 className="font-bold text-base flex items-center gap-2">
@@ -5536,19 +5781,25 @@ if (element) {
                 </button>
               </div>
 
-              {/* 2-Tab Switcher */}
+              {/* 3-Tab Switcher */}
               <div className="flex border-b border-neutral-800 shrink-0">
                 <button
                   onClick={() => { setSidebarTab('add'); setSelectedManagedCharts([]); }}
-                  className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-bold transition-all ${sidebarTab === 'add' ? 'border-b-2 border-orange-500 text-orange-400' : 'text-neutral-500 hover:text-neutral-300'}`}
+                  className={`flex-1 flex items-center justify-center gap-1 py-2.5 text-[11px] font-bold transition-all ${sidebarTab === 'add' ? 'border-b-2 border-orange-500 text-orange-400' : 'text-neutral-500 hover:text-neutral-300'}`}
                 >
-                  <Plus className="w-3.5 h-3.5" /> Add Chart
+                  <Plus className="w-3 h-3" /> Add Chart
                 </button>
                 <button
                   onClick={() => { setSidebarTab('manage'); setSelectedManagedCharts([]); }}
-                  className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-bold transition-all ${sidebarTab === 'manage' ? 'border-b-2 border-orange-500 text-orange-400' : 'text-neutral-500 hover:text-neutral-300'}`}
+                  className={`flex-1 flex items-center justify-center gap-1 py-2.5 text-[11px] font-bold transition-all ${sidebarTab === 'manage' ? 'border-b-2 border-orange-500 text-orange-400' : 'text-neutral-500 hover:text-neutral-300'}`}
                 >
-                  <Settings2 className="w-3.5 h-3.5" /> Manage Charts
+                  <Settings2 className="w-3.5 h-3.5" /> Manage
+                </button>
+                <button
+                  onClick={() => { setSidebarTab('datasets'); setSelectedManagedCharts([]); }}
+                  className={`flex-1 flex items-center justify-center gap-1 py-2.5 text-[11px] font-bold transition-all ${sidebarTab === 'datasets' ? 'border-b-2 border-orange-500 text-orange-400' : 'text-neutral-500 hover:text-neutral-300'}`}
+                >
+                  <Database className="w-3 h-3" /> Datasets
                 </button>
               </div>
 
@@ -5732,6 +5983,50 @@ if (element) {
                           </div>
                         );
                       })
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* ─── Tab 3: Datasets ─── */}
+              {sidebarTab === 'datasets' && (
+                <div className="flex-1 flex flex-col p-4 min-h-0">
+                  <div className="flex items-center justify-between mb-3 shrink-0">
+                    <span className="text-[10px] text-neutral-500 font-bold uppercase tracking-wider">
+                      {uniqueDatasets.length} datasets in dashboard
+                    </span>
+                  </div>
+                  <div className="flex-1 overflow-auto space-y-2 pr-1 custom-scrollbar">
+                    {uniqueDatasets.length === 0 ? (
+                      <div className="text-center text-neutral-500 mt-10 text-xs">
+                        No datasets used in this dashboard.
+                      </div>
+                    ) : (
+                      uniqueDatasets.map((ds) => (
+                        <div
+                          key={ds.id}
+                          onClick={() => {
+                            setSelectedEditingDataset(ds);
+                            setShowDatasetModal(true);
+                          }}
+                          className="p-3 bg-neutral-950 border border-neutral-800 hover:border-orange-500/50 rounded-xl transition-all cursor-pointer group flex items-center justify-between"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="w-8 h-8 rounded-lg bg-orange-500/10 flex items-center justify-center text-orange-500 shrink-0">
+                              <Database className="w-4 h-4" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold text-neutral-200 group-hover:text-orange-400 transition-colors truncate">
+                                {ds.name}
+                              </div>
+                              <div className="text-[9px] text-neutral-500 truncate">
+                                {ds.description || "No description"}
+                              </div>
+                            </div>
+                          </div>
+                          <ChevronRight className="w-4 h-4 text-neutral-600 group-hover:text-orange-500 transition-colors shrink-0" />
+                        </div>
+                      ))
                     )}
                   </div>
                 </div>
@@ -5994,6 +6289,30 @@ if (element) {
                 ) : (
                   // ECharts Code Editor Tab
                   <div className="flex-1 flex flex-col min-h-0 gap-4">
+                    {/* Compact Dataset Info Card */}
+                    <div className="bg-neutral-950 border border-neutral-850 rounded-xl p-3 flex items-center justify-between shrink-0 text-xs gap-3">
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <Database className="w-4 h-4 text-orange-500 shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[10px] text-neutral-500 font-bold uppercase tracking-wider leading-none mb-1">Active Dataset</div>
+                          <div className="font-semibold text-neutral-200 truncate" title={datasets.find(ds => ds.id === selectedDatasetId)?.name || "Unknown Dataset"}>
+                            {datasets.find(ds => ds.id === selectedDatasetId)?.name || "Unknown Dataset"}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex gap-3 shrink-0">
+                        <div className="text-right">
+                          <div className="text-[9px] text-neutral-500 font-bold uppercase tracking-wider leading-none mb-1">Rows</div>
+                          <div className="font-bold text-orange-400 font-mono">{datasetPreview?.rows?.length || 0}</div>
+                        </div>
+                        <div className="border-l border-neutral-800 self-stretch my-1" />
+                        <div className="text-right">
+                          <div className="text-[9px] text-neutral-500 font-bold uppercase tracking-wider leading-none mb-1">Cols</div>
+                          <div className="font-bold text-orange-400 font-mono">{datasetPreview?.columns?.length || 0}</div>
+                        </div>
+                      </div>
+                    </div>
+
                     <div className="flex-1 flex flex-col min-h-0">
                       <div className="flex items-center justify-between mb-2">
                         <label className="text-xs font-bold text-neutral-450 uppercase tracking-wider">ECharts Javascript Code</label>
@@ -6072,10 +6391,115 @@ if (element) {
             </div>
 
             {/* Main Preview Panel / AI Prompt Generator */}
-            <div className="flex-1 bg-neutral-900 border border-neutral-800 rounded-2xl p-6 flex flex-col shadow-lg h-[600px]">
-              {showChartPreview ? (
+            <div className="flex-1 min-w-0 bg-neutral-900 border border-neutral-800 rounded-2xl p-6 flex flex-col shadow-lg h-[600px]">
+              {(previewMode as string) === "table" ? (
+                // TABLE PREVIEW MODE
+                <div className="flex flex-col h-full">
+                  <div className="flex justify-between items-center mb-4 shrink-0">
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center">
+                        <Database className="w-3.5 h-3.5 text-white" />
+                      </div>
+                      <h3 className="font-bold text-neutral-200 text-sm">Data Table</h3>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex bg-neutral-950 p-1 rounded-xl border border-neutral-800">
+                        <button type="button" onClick={() => setPreviewMode("table")} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${(previewMode as string) === "table" ? "bg-orange-500/10 text-orange-400 border border-orange-500/30" : "text-neutral-500 hover:text-neutral-300"}`}>Table</button>
+                        <button type="button" onClick={() => setPreviewMode("chart")} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${(previewMode as string) === "chart" ? "bg-orange-500/10 text-orange-400 border border-orange-500/30" : "text-neutral-500 hover:text-neutral-300"}`}>Chart</button>
+                        <button type="button" onClick={() => setPreviewMode("ai")} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${(previewMode as string) === "ai" ? "bg-orange-500/10 text-orange-400 border border-orange-500/30" : "text-neutral-500 hover:text-neutral-300"}`}>AI Agent</button>
+                      </div>
+                    </div>
+                  </div>
+                  {/* Table Content */}
+                  <div className="flex-1 bg-neutral-950 border border-neutral-850 rounded-xl flex flex-col overflow-hidden shadow-inner max-w-full">
+                    {/* Search and Page Size */}
+                    <div className="flex items-center justify-between p-3 border-b border-neutral-850/50 bg-neutral-900/30 shrink-0 gap-4">
+                      <div className="relative flex-1 max-w-sm">
+                        <Search className="w-4 h-4 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input type="text" placeholder="Search dataset..." value={tableSearchQuery} onChange={(e) => { setTableSearchQuery(e.target.value); setTablePage(1); }} className="w-full bg-neutral-950 border border-neutral-800 focus:border-orange-500 rounded-lg pl-9 pr-3 py-1.5 text-xs text-neutral-200 outline-none" />
+                      </div>
+                      <div className="flex items-center gap-1.5 bg-neutral-950 px-2.5 py-1 rounded-xl border border-neutral-800 shrink-0 select-none">
+                        <span className="text-[10px] text-neutral-500 font-bold uppercase tracking-wider mr-1">Zoom</span>
+                        <button type="button" onClick={() => setTableZoom(z => Math.max(60, z - 10))} className="w-5 h-5 flex items-center justify-center text-xs text-neutral-450 hover:text-white hover:bg-neutral-900 rounded transition-colors font-bold cursor-pointer" title="Zoom Out">-</button>
+                        <span className="text-xs text-neutral-300 font-mono min-w-[36px] text-center">{tableZoom}%</span>
+                        <button type="button" onClick={() => setTableZoom(z => Math.min(160, z + 10))} className="w-5 h-5 flex items-center justify-center text-xs text-neutral-450 hover:text-white hover:bg-neutral-900 rounded transition-colors font-bold cursor-pointer" title="Zoom In">+</button>
+                      </div>
+                    </div>
+                    {/* Table Body */}
+                    <div className="flex-1 flex flex-col min-h-0 p-0">
+                      {datasetPreview?.rows ? (() => {
+                        const filteredData = datasetPreview.rows.filter((row: any) => {
+                          if (!tableSearchQuery) return true;
+                          const query = tableSearchQuery.toLowerCase();
+                          return Object.values(row).some(val => String(val).toLowerCase().includes(query));
+                        });
+                        const totalRecords = filteredData.length;
+                        const totalPages = Math.ceil(totalRecords / tablePageSize) || 1;
+                        const startIndex = (tablePage - 1) * tablePageSize;
+                        const currentData = filteredData.slice(startIndex, startIndex + tablePageSize);
+                        return (
+                          <div className="flex flex-col h-full min-h-0">
+                            <div className="flex-1 min-h-0 overflow-auto">
+                              <table className="min-w-full text-left border-collapse" style={{ fontSize: `${(tableZoom * 12) / 100}px` }}>
+                                <thead className="sticky top-0 bg-neutral-900 z-10 shadow-sm">
+                                  <tr>
+                                    <th className="px-4 py-2 text-neutral-400 font-bold uppercase tracking-wider border-b border-neutral-800 whitespace-nowrap bg-neutral-900 w-12">#</th>
+                                    {datasetPreview.columns?.map((c: any) => (
+                                      <th key={c.name || c} className="px-4 py-2 text-neutral-400 font-bold uppercase tracking-wider border-b border-neutral-800 whitespace-nowrap bg-neutral-900 min-w-[150px]">{c.name || c}</th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {currentData.length > 0 ? currentData.map((row: any, i: number) => (
+                                    <tr key={i} className="border-b border-neutral-850/50 hover:bg-neutral-900/30 transition-colors">
+                                      <td className="px-4 py-2 text-neutral-500 font-mono">{startIndex + i + 1}</td>
+                                      {datasetPreview.columns?.map((c: any) => (
+                                        <td key={c.name || c} className="px-4 py-2 text-neutral-300 truncate max-w-[300px] min-w-[150px]" title={String(row[c.name || c])}>{String(row[c.name || c])}</td>
+                                      ))}
+                                    </tr>
+                                  )) : (
+                                    <tr>
+                                      <td colSpan={(datasetPreview.columns?.length || 0) + 1} className="px-4 py-8 text-center text-neutral-500">No matching records found.</td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                            <div className="flex items-center justify-between p-3 border-t border-neutral-850 bg-neutral-900/30 shrink-0">
+                              <div className="text-xs text-neutral-400 font-semibold">
+                                Showing {totalRecords > 0 ? startIndex + 1 : 0}-{Math.min(startIndex + tablePageSize, totalRecords)} of {totalRecords} records
+                              </div>
+                              <div className="flex items-center gap-4">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs text-neutral-500">Rows per page:</span>
+                                  <select value={tablePageSize} onChange={e => { setTablePageSize(Number(e.target.value)); setTablePage(1); }} className="bg-neutral-950 border border-neutral-800 rounded-lg px-2 py-1 text-xs text-neutral-300 outline-none">
+                                    <option value={10}>10</option>
+                                    <option value={20}>20</option>
+                                    <option value={50}>50</option>
+                                    <option value={100}>100</option>
+                                  </select>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <button type="button" onClick={() => setTablePage(p => Math.max(1, p - 1))} disabled={tablePage === 1} className="p-1 rounded bg-neutral-900 hover:bg-neutral-800 disabled:opacity-50 text-neutral-400"><ChevronLeft className="w-4 h-4" /></button>
+                                  <span className="text-xs text-neutral-300 font-mono px-2">{tablePage} / {totalPages}</span>
+                                  <button type="button" onClick={() => setTablePage(p => Math.min(totalPages, p + 1))} disabled={tablePage === totalPages} className="p-1 rounded bg-neutral-900 hover:bg-neutral-800 disabled:opacity-50 text-neutral-400"><ChevronRight className="w-4 h-4" /></button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })() : (
+                        <div className="flex flex-col h-full items-center justify-center text-neutral-600">
+                          <Database className="w-12 h-12 mb-4 mx-auto opacity-20" />
+                          <p className="text-sm">No dataset selected.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : (previewMode as string) === "chart" ? (
                 // CHART PREVIEW MODE
-                <>
+                <div className="flex flex-col h-full">
                   {/* Header */}
                   <div className="flex justify-between items-center mb-4 shrink-0">
                     <div className="flex items-center gap-2">
@@ -6085,16 +6509,11 @@ if (element) {
                       <h3 className="font-bold text-neutral-200 text-sm">Chart Preview</h3>
                     </div>
                     <div className="flex items-center gap-2">
-                      {/* AI Agent toggle button */}
-                      <button
-                        type="button"
-                        onClick={() => setShowChartPreview(false)}
-                        className="flex items-center gap-1 px-2.5 py-1 bg-violet-500/10 border border-violet-500/25 hover:bg-violet-500/20 text-violet-400 text-xs font-bold rounded-lg transition-colors cursor-pointer"
-                        title="Mở AI Chart Agent"
-                      >
-                        <Sparkles className="w-3 h-3" />
-                        AI Agent
-                      </button>
+                      <div className="flex bg-neutral-950 p-1 rounded-xl border border-neutral-800 mr-2">
+                        <button type="button" onClick={() => setPreviewMode("table")} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${(previewMode as string) === "table" ? "bg-orange-500/10 text-orange-400 border border-orange-500/30" : "text-neutral-500 hover:text-neutral-300"}`}>Table</button>
+                        <button type="button" onClick={() => setPreviewMode("chart")} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${(previewMode as string) === "chart" ? "bg-orange-500/10 text-orange-400 border border-orange-500/30" : "text-neutral-500 hover:text-neutral-300"}`}>Chart</button>
+                        <button type="button" onClick={() => setPreviewMode("ai")} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${(previewMode as string) === "ai" ? "bg-orange-500/10 text-orange-400 border border-orange-500/30" : "text-neutral-500 hover:text-neutral-300"}`}>AI Agent</button>
+                      </div>
                       <button
                         type="button"
                         onClick={() => {
@@ -6116,9 +6535,9 @@ if (element) {
                     </div>
                   </div>
 
-                  <div className="flex-1 bg-neutral-950 border border-neutral-850 rounded-xl p-4 overflow-hidden relative shadow-inner">
+                  <div className="flex-1 bg-neutral-950 border border-neutral-850 rounded-xl overflow-auto relative shadow-inner">
                     {evalSuccess && datasetPreview && datasetPreview.rows ? (
-                      <div className="absolute inset-0 p-4">
+                      <div className="min-w-[1200px] h-full p-4">
                         <EChartRenderer ref={previewChartRef} config={currentChartConfig} data={datasetPreview.rows} />
                       </div>
                     ) : (
@@ -6130,10 +6549,10 @@ if (element) {
                       </div>
                     )}
                   </div>
-                </>
-              ) : (
+                </div>
+              ) : (previewMode as string) === "ai" ? (
                 // AI AGENT CODING PANEL
-                <>
+                <div className="flex flex-col h-full">
                   {/* Header */}
                   <div className="flex justify-between items-center mb-3 shrink-0">
                     <div className="flex items-center gap-2">
@@ -6145,17 +6564,11 @@ if (element) {
                         Gemini
                       </span>
                     </div>
-                    {!isFirstAiGen && (
-                      <button
-                        type="button"
-                        onClick={() => setShowChartPreview(true)}
-                        className="flex items-center gap-1 px-2.5 py-1 bg-neutral-950 border border-neutral-800 hover:bg-neutral-800 text-xs font-semibold text-neutral-400 hover:text-white rounded-lg transition-colors cursor-pointer"
-                        title="Xem Chart Preview"
-                      >
-                        <BarChart3 className="w-3 h-3 text-orange-500" />
-                        Preview
-                      </button>
-                    )}
+                    <div className="flex bg-neutral-950 p-1 rounded-xl border border-neutral-800">
+                        <button type="button" onClick={() => setPreviewMode("table")} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${(previewMode as string) === "table" ? "bg-orange-500/10 text-orange-400 border border-orange-500/30" : "text-neutral-500 hover:text-neutral-300"}`}>Table</button>
+                        <button type="button" onClick={() => setPreviewMode("chart")} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${(previewMode as string) === "chart" ? "bg-orange-500/10 text-orange-400 border border-orange-500/30" : "text-neutral-500 hover:text-neutral-300"}`}>Chart</button>
+                        <button type="button" onClick={() => setPreviewMode("ai")} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${(previewMode as string) === "ai" ? "bg-orange-500/10 text-orange-400 border border-orange-500/30" : "text-neutral-500 hover:text-neutral-300"}`}>AI Agent</button>
+                    </div>
                   </div>
 
                   {/* Body: First gen form OR chat history */}
@@ -6401,8 +6814,8 @@ if (element) {
                       </button>
                     </div>
                   </div>
-                </>
-              )}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -6533,7 +6946,14 @@ if (element) {
                         for (const datasetId of uniqueDatasetIds) {
                            if (!datasetId) continue;
                            try {
-                             const res = await fetch(`http://localhost:8000/api/v1/datasets/${datasetId}/preview`, { method: "POST" });
+                             const res = await fetch(`${API_BASE}/datasets/${datasetId}/preview`, {
+                               method: "POST",
+                               headers: {
+                                 'Cache-Control': 'no-cache, no-store, must-revalidate',
+                                 'Pragma': 'no-cache',
+                                 'Expires': '0'
+                               }
+                             });
                              const data = await res.json();
                              setDashboardItems(prev => prev.map(item => {
                                if (item.chart?.dataset_id === datasetId && autoReloadSelectedCharts.includes(item.chart.id)) {
@@ -6836,6 +7256,46 @@ if (element) {
         </div>
       )}
 
+      {/* Manage Dataset Modal */}
+      {showDatasetModal && selectedEditingDataset && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-11/12 h-[85vh] bg-neutral-950 border border-neutral-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="flex justify-between items-center p-5 border-b border-neutral-800 bg-neutral-900/60 backdrop-blur-md shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-orange-500/10 flex items-center justify-center text-orange-500">
+                  <Database className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-lg text-neutral-50 flex items-center gap-2">
+                    Manage Dataset: {selectedEditingDataset.name}
+                  </h3>
+                  <p className="text-xs text-neutral-500">Edit queries, columns, and data settings</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => {
+                  setShowDatasetModal(false);
+                  setSelectedEditingDataset(null);
+                  loadHubData();
+                }} 
+                className="p-2 hover:bg-neutral-800 rounded-xl text-neutral-400 hover:text-neutral-50 transition-colors cursor-pointer"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            {/* Iframe Container */}
+            <div className="flex-1 bg-neutral-950 relative">
+              <iframe
+                src={`/data-sources?tab=sql-editor&datasetId=${selectedEditingDataset.id}&preview=true`}
+                className="w-full h-full border-none"
+                title={`Dataset Query Editor - ${selectedEditingDataset.name}`}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Create Dashboard Modal */}
       {showCreateDashModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
@@ -7057,6 +7517,11 @@ if (element) {
               <h3 className="font-bold text-xl text-neutral-50 flex items-center gap-2">
                 <Maximize2 className="text-orange-400 w-5 h-5" />
                 Fullscreen ECharts Code Editor
+                <span className="text-xs font-normal text-neutral-455 bg-neutral-950 border border-neutral-850 px-3 py-1 rounded-xl ml-4 flex items-center gap-2 font-mono">
+                  <Database className="w-3.5 h-3.5 text-orange-500" />
+                  Dataset: <span className="font-bold text-neutral-300">{datasets.find(ds => ds.id === selectedDatasetId)?.name || "Unknown Dataset"}</span> 
+                  ({datasetPreview?.rows?.length || 0} rows, {datasetPreview?.columns?.length || 0} cols)
+                </span>
               </h3>
               <button
                 onClick={() => setShowMaximizeCodeModal(false)}
@@ -7254,11 +7719,27 @@ if (element) {
       {editDashboardChartItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="w-[90vw] h-[85vh] bg-neutral-900 border border-neutral-800 rounded-2xl shadow-2xl p-6 relative flex flex-col animate-in scale-in duration-150">
-            <div className="flex justify-between items-center mb-4 shrink-0">
-              <h3 className="font-bold text-xl text-neutral-50 flex items-center gap-2">
-                <PenTool className="text-orange-400 w-5 h-5" />
-                Edit Code for: {editDashboardChartItem.chart.name}
-              </h3>
+            <div className="flex justify-between items-center mb-4 shrink-0 border-b border-neutral-800 pb-3">
+              <div>
+                <h3 className="font-bold text-xl text-neutral-50 flex items-center gap-2">
+                  <PenTool className="text-orange-400 w-5 h-5" />
+                  Edit Code for: {editDashboardChartItem.chart.name}
+                </h3>
+                {(() => {
+                  const dataset = datasets.find(ds => ds.id === editDashboardChartItem.chart.dataset_id);
+                  const rowsCount = editDashboardChartItem.data?.length || 0;
+                  const colsCount = dataset?.columns_schema?.length || (editDashboardChartItem.data?.[0] ? Object.keys(editDashboardChartItem.data[0]).length : 0);
+                  return (
+                    <p className="text-xs text-neutral-400 mt-1.5 flex items-center gap-2 font-medium">
+                      <span className="font-semibold text-orange-400">Dataset:</span> {dataset?.name || "Unknown Dataset"}
+                      <span className="text-neutral-600">•</span>
+                      <span className="font-semibold text-orange-400">Bản ghi:</span> {rowsCount.toLocaleString()} dòng
+                      <span className="text-neutral-600">•</span>
+                      <span className="font-semibold text-orange-400">Cột:</span> {colsCount} cột
+                    </p>
+                  );
+                })()}
+              </div>
               <button
                 onClick={() => setEditDashboardChartItem(null)}
                 className="text-neutral-400 hover:text-neutral-200 transition-colors p-1.5 hover:bg-neutral-800 rounded-xl cursor-pointer"
@@ -7374,14 +7855,49 @@ if (element) {
                 <div className="flex-1 bg-neutral-950 border border-neutral-850 rounded-xl p-4 overflow-hidden relative shadow-inner">
                   {editDashboardChartItem.data ? (
                     <div className="absolute inset-0 p-4">
-                      <EChartRenderer
-                        config={{
-                          chartType: "custom",
-                          encodings: {},
-                          echartsOption: editDashboardChartEvaluatedOption
-                        }}
-                        data={getFilteredData(editDashboardChartItem)}
-                      />
+                      {editDashboardChartItem.chart.transform_config?.display_mode === "table" ? (
+                        <div className="w-full h-full overflow-auto max-w-full max-h-full">
+                          <table className="min-w-full text-left border-collapse" style={{ fontSize: `${(editDashboardChartItem.chart.transform_config?.table_zoom ?? 100) * 11 / 100}px` }}>
+                            <thead className="sticky top-0 bg-neutral-900 z-10 shadow-sm">
+                              <tr className="border-b border-neutral-800">
+                                <th className="px-3 py-2 text-neutral-400 font-bold uppercase tracking-wider whitespace-nowrap bg-neutral-900 w-10">#</th>
+                                {getFilteredData(editDashboardChartItem) && getFilteredData(editDashboardChartItem).length > 0 && Object.keys(getFilteredData(editDashboardChartItem)[0]).map((col) => (
+                                  <th key={col} className="px-3 py-2 text-neutral-400 font-bold uppercase tracking-wider whitespace-nowrap bg-neutral-900 min-w-[120px]">{col}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {getFilteredData(editDashboardChartItem) && getFilteredData(editDashboardChartItem).length > 0 ? (
+                                getFilteredData(editDashboardChartItem).map((row: any, rIdx: number) => (
+                                  <tr key={rIdx} className="border-b border-neutral-850/50 hover:bg-neutral-900/30 transition-colors">
+                                    <td className="px-3 py-1.5 text-neutral-550 font-mono">{rIdx + 1}</td>
+                                    {Object.keys(row).map((col) => (
+                                      <td key={col} className="px-3 py-1.5 text-neutral-300 truncate max-w-[200px]" title={String(row[col])}>
+                                        {String(row[col])}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))
+                              ) : (
+                                <tr>
+                                  <td colSpan={getFilteredData(editDashboardChartItem) && getFilteredData(editDashboardChartItem).length > 0 ? Object.keys(getFilteredData(editDashboardChartItem)[0]).length + 1 : 1} className="px-3 py-4 text-center text-neutral-500">
+                                    No data available
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <EChartRenderer
+                          config={{
+                            chartType: "custom",
+                            encodings: {},
+                            echartsOption: editDashboardChartEvaluatedOption
+                          }}
+                          data={getFilteredData(editDashboardChartItem)}
+                        />
+                      )}
                     </div>
                   ) : (
                     <div className="h-full flex flex-col items-center justify-center text-neutral-600">
@@ -7627,7 +8143,7 @@ if (element) {
 
       {/* Widget Style Editor Sidebar */}
       {showWidgetStyleModal && stylingWidgetId && (
-        <div className="fixed inset-y-0 right-0 w-96 bg-neutral-900 border-l border-neutral-800 shadow-2xl z-[60] flex flex-col animate-in slide-in-from-right duration-200 overflow-hidden">
+        <div className={`fixed ${isHeaderDisabled || isPreviewMode ? 'top-0' : 'top-20'} bottom-0 right-0 w-96 bg-neutral-900 border-l border-neutral-800 shadow-2xl z-35 flex flex-col animate-in slide-in-from-right duration-200 overflow-hidden`}>
           {(() => {
             const widget = dashboardWidgets.find(w => w.id === stylingWidgetId);
             if (!widget) return null;
@@ -8248,7 +8764,7 @@ if (element) {
 
       {/* Frame Style Editor Sidebar */}
       {showFrameStyleModal && stylingFrameId && (
-        <div className="fixed inset-y-0 right-0 w-96 bg-neutral-900 border-l border-neutral-800 shadow-2xl z-[60] flex flex-col animate-in slide-in-from-right duration-200 overflow-hidden">
+        <div className={`fixed ${isHeaderDisabled || isPreviewMode ? 'top-0' : 'top-20'} bottom-0 right-0 w-96 bg-neutral-900 border-l border-neutral-800 shadow-2xl z-35 flex flex-col animate-in slide-in-from-right duration-200 overflow-hidden`}>
           {(() => {
             const frame = dashboardFrames.find(f => f.id === stylingFrameId);
             if (!frame) return null;

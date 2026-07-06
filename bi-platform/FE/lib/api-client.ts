@@ -5,6 +5,7 @@ export const apiClient = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1',
   headers: {
     'Content-Type': 'application/json',
+    'ngrok-skip-browser-warning': 'any-value',
   },
 });
 
@@ -59,7 +60,13 @@ export const api = {
       return response.data;
     },
     preview: async (data: any) => {
-      const response = await apiClient.post('/queries/preview', data);
+      const response = await apiClient.post('/queries/preview', data, {
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        }
+      });
       return response.data;
     },
     create: async (data: any) => {
@@ -89,7 +96,17 @@ export const api = {
       return response.data;
     },
     preview: async (id: string) => {
-      const response = await apiClient.post(`/datasets/${id}/preview`);
+      const response = await apiClient.post(`/datasets/${id}/preview`, {}, {
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        }
+      });
+      return response.data;
+    },
+    exportData: async (id: string) => {
+      const response = await apiClient.post(`/datasets/${id}/export`);
       return response.data;
     },
     importExcel: async (data: any) => {
@@ -97,6 +114,21 @@ export const api = {
       return response.data;
     }
   },
+  folders: {
+    list: async (workspaceId: string) => {
+      const response = await apiClient.get(`/datasets/folders/workspace/${workspaceId}`);
+      return response.data;
+    },
+    create: async (data: { name: string; workspace_id: string; parent_id: string | null }) => {
+      const response = await apiClient.post('/datasets/folders', data);
+      return response.data;
+    },
+    delete: async (id: string) => {
+      const response = await apiClient.delete(`/datasets/folders/${id}`);
+      return response.data;
+    }
+  },
+
   charts: {
     list: async (workspaceId: string) => {
       const response = await apiClient.get(`/charts/workspace/${workspaceId}`);

@@ -2,9 +2,10 @@
 
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
-import { User, getAccessToken, clearTokens, fetchWithAuth } from './auth';
+import { User, getAccessToken, getRefreshToken, clearTokens, fetchWithAuth } from './auth';
 
 const JUST_LOGGED_IN_KEY = 'stockpro:auth:just-logged-in';
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
 interface AuthContextType {
     user: User | null;
@@ -37,16 +38,19 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             }
 
             try {
-                const res = await fetchWithAuth('http://localhost:8000/api/v1/auth/me');
+                const res = await fetchWithAuth(`${API}/auth/me`);
                 if (res.ok) {
                     const userData = await res.json();
                     setUser(userData);
                 } else {
-                    clearTokens();
+                    // Chỉ xoá token nếu lỗi xác thực (401/403)
+                    if (res.status === 401 || res.status === 403) {
+                        clearTokens();
+                    }
                     setUser(null);
                 }
             } catch (err) {
-                clearTokens();
+                // Không xoá token khi có lỗi kết nối mạng (ví dụ: server đang khởi động)
                 setUser(null);
             } finally {
                 setIsLoading(false);
@@ -59,58 +63,95 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     useEffect(() => {
         if (!user) return;
 
-        const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
-        const RENEW_THRESHOLD = 4 * 60 * 1000; // Renew session every 4 minutes if active
-        const CHECK_INTERVAL = 10000; // Check every 10 seconds
+        const LAST_ACTIVITY_KEY = 'stockpro:auth:last-activity';
 
-        let lastActivity = Date.now();
-        let lastPing = Date.now();
+        // Initialize last activity for the account session
+        try {
+            if (!localStorage.getItem(LAST_ACTIVITY_KEY)) {
+                localStorage.setItem(LAST_ACTIVITY_KEY, Date.now().toString());
+            }
+        } catch (e) {}
 
         const updateActivity = () => {
-            lastActivity = Date.now();
+            try {
+                localStorage.setItem(LAST_ACTIVITY_KEY, Date.now().toString());
+            } catch (e) {}
         };
 
         const events = ['mousemove', 'keydown', 'scroll', 'click', 'touchstart'];
         events.forEach(event => window.addEventListener(event, updateActivity, { passive: true }));
 
-        const managementInterval = setInterval(async () => {
-            const now = Date.now();
-            const idleTime = now - lastActivity;
+        // Kiểm tra mỗi 10 giây: nếu không thao tác trên bất kỳ tab nào trong 5 phút (300,000 ms) thì auto logout
+        const checkInactivity = setInterval(() => {
+            // Check if tokens were cleared by another tab (e.g. manual logout or other tab logged out)
+            const token = getAccessToken();
+            const refresh = getRefreshToken();
+            if (!token && !refresh) {
+                setUser(null);
+                try {
+                    localStorage.removeItem(LAST_ACTIVITY_KEY);
+                } catch (e) {}
+                return;
+            }
 
-            // 1. Check for Inactivity Timeout
-            if (idleTime >= IDLE_TIMEOUT) {
+            // Không áp dụng quy tắc 5 phút cho trang bảng điện
+            if (pathname.startsWith('/price-board')) {
+                return;
+            }
+
+            let lastActivity = Date.now();
+            try {
+                const stored = localStorage.getItem(LAST_ACTIVITY_KEY);
+                if (stored) {
+                    lastActivity = parseInt(stored, 10);
+                }
+            } catch (e) {}
+
+            if (Date.now() - lastActivity > 5 * 60 * 1000) {
                 // Tự động gọi API đăng xuất và xoá token
-                const refresh = typeof window !== 'undefined' && document.cookie.split('; ').find(row => row.startsWith('refresh_token='))?.split('=')[1];
-                if (refresh) {
-                    fetch('http://localhost:8000/api/v1/auth/logout', {
+                const currentRefresh = typeof window !== 'undefined' && document.cookie.split('; ').find(row => row.startsWith('refresh_token='))?.split('=')[1];
+                if (currentRefresh) {
+                    fetch(`${API}/auth/logout`, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ refresh_token: refresh })
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'ngrok-skip-browser-warning': '69420'
+                        },
+                        body: JSON.stringify({ refresh_token: currentRefresh })
                     }).catch(() => {});
                 }
                 clearTokens();
                 setUser(null);
-                return;
-            }
-
-            // 2. Proactive Session Renewal (Gia hạn session)
-            // If user is active AND it's been more than RENEW_THRESHOLD since last ping
-            if (idleTime < IDLE_TIMEOUT && (now - lastPing) >= RENEW_THRESHOLD) {
-                lastPing = now;
                 try {
-                    // Gọi endpoint /me để refresh token và cập nhật session trên server
-                    await fetchWithAuth('http://localhost:8000/api/v1/auth/me');
-                } catch (err) {
-                    // Ignore background fetch errors
-                }
+                    localStorage.removeItem(LAST_ACTIVITY_KEY);
+                } catch (e) {}
             }
-        }, CHECK_INTERVAL);
+        }, 10000);
+
+        // Giữ phiên làm việc của người dùng hoạt động bằng cách gọi endpoint (/me) sau mỗi 5 phút
+        // Gọi định kỳ để kích hoạt tự động refresh token trong auth.ts
+        const keepAlive = setInterval(async () => {
+            // Chỉ thực hiện keepalive nếu tab này là tab có hoạt động gần đây nhất để tránh gửi quá nhiều request từ các tab khác
+            try {
+                const stored = localStorage.getItem(LAST_ACTIVITY_KEY);
+                if (stored) {
+                    // Nếu không có hoạt động trong vòng 5 phút, bỏ qua keepalive
+                    if (Date.now() - parseInt(stored, 10) > 5 * 60 * 1000) {
+                        return;
+                    }
+                }
+                await fetchWithAuth(`${API}/auth/me`);
+            } catch (err) {
+                // Ignore background fetch errors
+            }
+        }, 5 * 60 * 1000); // 5 minutes
 
         return () => {
             events.forEach(event => window.removeEventListener(event, updateActivity));
-            clearInterval(managementInterval);
+            clearInterval(checkInactivity);
+            clearInterval(keepAlive);
         };
-    }, [user]);
+    }, [user, pathname]);
 
     const login = (newUser: User) => {
         setUser(newUser);
@@ -127,9 +168,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
         if (refresh) {
             try {
-                await fetch('http://localhost:8000/api/v1/auth/logout', {
+                await fetch(`${API}/auth/logout`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'ngrok-skip-browser-warning': '69420'
+                    },
                     body: JSON.stringify({ refresh_token: refresh })
                 });
             } catch (e) {
@@ -141,6 +185,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setUser(null);
         try {
             sessionStorage.removeItem(JUST_LOGGED_IN_KEY);
+            localStorage.removeItem('stockpro:auth:last-activity');
         } catch {
             // ignore storage failures
         }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api-client";
 import * as XLSX from "xlsx";
 import { 
@@ -24,29 +25,15 @@ import {
   ChevronRight,
   ArrowUp,
   ArrowDown,
-  Download,
-  FileText,
-  FileJson,
-  FileCode
+  Folder,
+  FolderPlus,
+  Move
 } from "lucide-react";
 import * as Sonner from "sonner";
 
 const WORKSPACE_ID = "00000000-0000-0000-0000-000000000000";
 
 export default function DataSourcesPage() {
-  const [exportLoading, setExportLoading] = useState(false);
-  const [showExportDropdown, setShowExportDropdown] = useState(false);
-  const exportRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (exportRef.current && !exportRef.current.contains(event.target as Node)) {
-        setShowExportDropdown(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text).then(() => {
       Sonner.toast.success(`Copied "${text}" to clipboard`);
@@ -57,7 +44,22 @@ export default function DataSourcesPage() {
   };
 
   // Tabs & Views state
-  const [activeTab, setActiveTab] = useState<"connections" | "sql-editor" | "datasets">("sql-editor");
+  const searchParams = useSearchParams();
+  const isPreviewMode = searchParams.get("preview") === "true";
+  const urlTab = searchParams.get("tab") as "connections" | "sql-editor" | "datasets" | null;
+  const [activeTab, setActiveTab] = useState<"connections" | "sql-editor" | "datasets">(
+    urlTab === "connections" || urlTab === "sql-editor" || urlTab === "datasets" 
+      ? urlTab 
+      : "sql-editor"
+  );
+
+  // Sync tab selection from query params
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (tab === "connections" || tab === "sql-editor" || tab === "datasets") {
+      setActiveTab(tab);
+    }
+  }, [searchParams]);
 
   // Search State
   const [connectionSearch, setConnectionSearch] = useState("");
@@ -84,10 +86,28 @@ export default function DataSourcesPage() {
   const [datasetsLoading, setDatasetsLoading] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [previewDatasetData, setPreviewDatasetData] = useState<{columns: any[], rows: any[], error?: string}|null>(null);
+  const [previewingDataset, setPreviewingDataset] = useState<any | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [copiedQueryIndex, setCopiedQueryIndex] = useState<number | null>(null);
   const [editingDatasetId, setEditingDatasetId] = useState<string | null>(null);
   const [editingQueryId, setEditingQueryId] = useState<string | null>(null);
+
+  // Datasets Pagination State
+  const [datasetsPage, setDatasetsPage] = useState(1);
+  const DATASETS_PAGE_SIZE = 10;
+
+  // Folders & Directory State
+  const [folders, setFolders] = useState<any[]>([]);
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const [showCreateFolderModal, setShowCreateFolderModal] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [movingDataset, setMovingDataset] = useState<any | null>(null);
+  const [targetFolderId, setTargetFolderId] = useState<string>("");
+
+  // Reset datasets page when search query changes
+  useEffect(() => {
+    setDatasetsPage(1);
+  }, [datasetSearch]);
 
   // Excel Import State (UI only)
   const excelWorkbookRef = useRef<XLSX.WorkBook | null>(null);
@@ -214,8 +234,10 @@ export default function DataSourcesPage() {
     try {
       const data = await api.datasets.list(WORKSPACE_ID);
       setDatasets(data);
+      const foldersData = await api.folders.list(WORKSPACE_ID);
+      setFolders(foldersData);
     } catch (error) {
-      console.error("Failed to load datasets", error);
+      console.error("Failed to load datasets and folders", error);
     }
     setDatasetsLoading(false);
   };
@@ -295,12 +317,13 @@ export default function DataSourcesPage() {
     }
   };
 
-  const handlePreviewDataset = async (id: string) => {
+  const handlePreviewDataset = async (dataset: any) => {
+    setPreviewingDataset(dataset);
     setPreviewLoading(true);
     setPreviewDatasetData(null);
     setShowPreviewModal(true);
     try {
-      const res = await api.datasets.preview(id);
+      const res = await api.datasets.preview(dataset.id);
       setPreviewDatasetData(res);
     } catch (error: any) {
       setPreviewDatasetData({
@@ -310,6 +333,61 @@ export default function DataSourcesPage() {
       });
     }
     setPreviewLoading(false);
+  };
+
+  const handleExportExcel = async (dataset: any) => {
+    const toastId = Sonner.toast.loading(`Đang tải dữ liệu cho dataset "${dataset.name}"...`);
+    try {
+      const res = await api.datasets.exportData(dataset.id);
+      if (res.error) {
+        throw new Error(res.error);
+      }
+      if (!res.rows || res.rows.length === 0) {
+        Sonner.toast.warning("Không có dữ liệu trong dataset này để xuất.");
+        Sonner.toast.dismiss(toastId);
+        return;
+      }
+
+      // Convert numeric values represented as strings to actual numbers
+      // so SheetJS outputs them as numeric cells and Excel formats them correctly.
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      const formattedRows = res.rows.map((row: any) => {
+        const newRow: any = {};
+        for (const key in row) {
+          if (Object.prototype.hasOwnProperty.call(row, key)) {
+            const val = row[key];
+            if (val === null || val === undefined) {
+              newRow[key] = val;
+            } else if (typeof val === "string") {
+              const trimmed = val.trim();
+              const numericRegex = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
+              const intPart = trimmed.split(".")[0].replace("-", "");
+              if (numericRegex.test(trimmed) && intPart.length < 16) {
+                const num = parseFloat(trimmed);
+                if (!isNaN(num)) {
+                  newRow[key] = num;
+                  continue;
+                }
+              }
+              newRow[key] = val;
+            } else {
+              newRow[key] = val;
+            }
+          }
+        }
+        return newRow;
+      });
+      /* eslint-enable @typescript-eslint/no-explicit-any */
+
+      const ws = XLSX.utils.json_to_sheet(formattedRows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Dữ liệu");
+      XLSX.writeFile(wb, `${dataset.name}.xlsx`);
+      Sonner.toast.success(`Xuất Excel dataset "${dataset.name}" thành công!`, { id: toastId });
+    } catch (error: any) {
+      console.error("Failed to export dataset to Excel", error);
+      Sonner.toast.error(error.message || error.response?.data?.detail || "Lỗi khi xuất file Excel.", { id: toastId });
+    }
   };
 
   const handleEditDataset = async (dataset: any) => {
@@ -340,6 +418,79 @@ export default function DataSourcesPage() {
       alert("Failed to prepare dataset for editing");
     }
   };
+
+  const handleCreateFolder = async () => {
+    if (!newFolderName.trim()) return;
+    try {
+      await api.folders.create({
+        name: newFolderName.trim(),
+        workspace_id: WORKSPACE_ID,
+        parent_id: currentFolderId
+      });
+      setNewFolderName("");
+      setShowCreateFolderModal(false);
+      loadDatasets();
+      Sonner.toast.success("Folder created successfully");
+    } catch (err) {
+      console.error("Failed to create folder", err);
+      Sonner.toast.error("Failed to create folder");
+    }
+  };
+
+  const handleDeleteFolder = async (folderId: string) => {
+    if (!confirm("Are you sure you want to delete this folder? All datasets inside it will be moved to the 'general' folder.")) return;
+    try {
+      await api.folders.delete(folderId);
+      loadDatasets();
+      Sonner.toast.success("Folder deleted");
+    } catch (err) {
+      console.error("Failed to delete folder", err);
+      Sonner.toast.error("Failed to delete folder");
+    }
+  };
+
+  const handleMoveDataset = async () => {
+    if (!movingDataset) return;
+    try {
+      const destFolderId = targetFolderId === "root" ? null : targetFolderId;
+      await api.datasets.update(movingDataset.id, {
+        folder_id: destFolderId
+      });
+      setMovingDataset(null);
+      loadDatasets();
+      Sonner.toast.success(`Dataset moved successfully`);
+    } catch (err: any) {
+      console.error("Failed to move dataset", err);
+      Sonner.toast.error(err.response?.data?.detail || "Failed to move dataset");
+    }
+  };
+
+  const getIndentedFolders = (parentId: string | null = null, depth = 0): any[] => {
+    const result: any[] = [];
+    folders.filter(f => f.parent_id === parentId).forEach(f => {
+      result.push({ ...f, label: "\u00a0\u00a0".repeat(depth) + f.name });
+      result.push(...getIndentedFolders(f.id, depth + 1));
+    });
+    return result;
+  };
+  
+  // Auto-edit dataset if datasetId is passed in search params
+  useEffect(() => {
+    const datasetId = searchParams.get("datasetId");
+    if (datasetId) {
+      (async () => {
+        try {
+          const datasetsList = await api.datasets.list(WORKSPACE_ID);
+          const dataset = datasetsList.find((d: any) => d.id === datasetId);
+          if (dataset) {
+            handleEditDataset(dataset);
+          }
+        } catch (error) {
+          console.error("Failed to auto-load dataset for editing from query params", error);
+        }
+      })();
+    }
+  }, [searchParams]);
 
   const resetExcelImportState = () => {
     setExcelFileName("");
@@ -668,7 +819,7 @@ export default function DataSourcesPage() {
 
   const handleSaveDataset = async () => {
     if (!selectedSourceId || !datasetName || !previewData) {
-      alert("Please provide a name, select a source, and run a successful preview first.");
+      Sonner.toast.warning("Vui lòng nhập tên, chọn nguồn kết nối, và thực hiện truy vấn thành công trước.");
       return;
     }
     try {
@@ -689,7 +840,7 @@ export default function DataSourcesPage() {
           data_source_id: selectedSourceId
         });
         
-        alert("Dataset updated successfully!");
+        Sonner.toast.success("Cập nhật dataset thành công!");
       } else {
         // 1. Create query
         const query = await api.queries.create({
@@ -710,7 +861,7 @@ export default function DataSourcesPage() {
           columns_schema: previewData.columns
         });
         
-        alert("Dataset saved successfully!");
+        Sonner.toast.success("Lưu dataset thành công!");
       }
       
       setDatasetName("");
@@ -720,94 +871,10 @@ export default function DataSourcesPage() {
       setEditingQueryId(null);
       setActiveTab("datasets");
       loadDatasets();
-    } catch (err) {
-      console.error(err);
-      alert("Failed to save dataset");
-    }
-  };
-
-  const handleExport = async (format: 'txt' | 'csv' | 'excel' | 'json') => {
-    if (!selectedSourceId || !sql) {
-      Sonner.toast.error("Vui lòng chọn nguồn dữ liệu và nhập câu lệnh SQL");
-      return;
-    }
-
-    setExportLoading(true);
-    setShowExportDropdown(false);
-    
-    try {
-      // Fetch full records (up to a large limit)
-      // The user wants "full records", so we use a high limit like 100,000
-      const res = await api.queries.preview({
-        data_source_id: selectedSourceId,
-        sql_text: sql,
-        database: selectedDatabase,
-        schema_name: selectedSchema,
-        limit: 100000 // High limit for export
-      });
-
-      if (res.error) {
-        Sonner.toast.error(`Lỗi khi lấy dữ liệu xuất: ${res.error}`);
-        setExportLoading(false);
-        return;
-      }
-
-      const rows = res.rows;
-      const columns = res.columns.map((c: any) => c.name);
-      const filename = `export_${new Date().getTime()}`;
-
-      if (format === 'csv') {
-        const csvContent = [
-          columns.join(','),
-          ...rows.map((row: any) => columns.map((col: string) => {
-            const val = row[col];
-            if (val === null || val === undefined) return '';
-            const strVal = String(val);
-            if (strVal.includes(',') || strVal.includes('"') || strVal.includes('\n')) {
-              return `"${strVal.replace(/"/g, '""')}"`;
-            }
-            return strVal;
-          }).join(','))
-        ].join('\n');
-
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = `${filename}.csv`;
-        link.click();
-      } 
-      else if (format === 'excel') {
-        const worksheet = XLSX.utils.json_to_sheet(rows);
-        const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, worksheet, "Results");
-        XLSX.writeFile(workbook, `${filename}.xlsx`);
-      } 
-      else if (format === 'json') {
-        const jsonContent = JSON.stringify(rows, null, 2);
-        const blob = new Blob([jsonContent], { type: 'application/json' });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = `${filename}.json`;
-        link.click();
-      } 
-      else if (format === 'txt') {
-        const txtContent = rows.map((row: any) => 
-          columns.map((col: string) => `${col}: ${row[col]}`).join(' | ')
-        ).join('\n');
-        
-        const blob = new Blob([txtContent], { type: 'text/plain' });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = `${filename}.txt`;
-        link.click();
-      }
-
-      Sonner.toast.success(`Đã xuất dữ liệu thành công (${rows.length} bản ghi)`);
     } catch (err: any) {
       console.error(err);
-      Sonner.toast.error(`Lỗi xuất dữ liệu: ${err.response?.data?.detail || err.message}`);
-    } finally {
-      setExportLoading(false);
+      const msg = err.response?.data?.detail || "Không thể lưu dataset";
+      Sonner.toast.error(msg);
     }
   };
 
@@ -905,20 +972,59 @@ export default function DataSourcesPage() {
 
   // Rendering Helper for Datasets List View
   const renderDatasetsTab = () => {
+    const isSearching = datasetSearch.trim().length > 0;
+
     const filteredDatasets = datasets.filter(ds => {
       const source = dataSources.find(s => s.id === ds.data_source_id);
       return ds.name.toLowerCase().includes(datasetSearch.toLowerCase()) ||
              (source?.name || "").toLowerCase().includes(datasetSearch.toLowerCase());
     });
 
+    const currentSubfolders = folders.filter(f => f.parent_id === currentFolderId);
+    const currentDatasets = datasets.filter(ds => {
+      if (currentFolderId === null) {
+        return ds.folder_id === null || ds.folder_id === undefined;
+      }
+      return ds.folder_id === currentFolderId;
+    });
+
+    const activeDatasets = isSearching ? filteredDatasets : currentDatasets;
+    const totalDatasets = activeDatasets.length;
+    const totalDatasetsPages = Math.ceil(totalDatasets / DATASETS_PAGE_SIZE);
+    
+    // Bounds-safe current page determination
+    const currentDatasetsPage = Math.max(1, Math.min(datasetsPage, totalDatasetsPages || 1));
+    const paginatedDatasets = activeDatasets.slice(
+      (currentDatasetsPage - 1) * DATASETS_PAGE_SIZE,
+      currentDatasetsPage * DATASETS_PAGE_SIZE
+    );
+
+    // Get folder breadcrumbs path
+    const getFolderBreadcrumbs = (folderId: string | null): any[] => {
+      const path: any[] = [];
+      let currId = folderId;
+      const visited = new Set();
+      while (currId && !visited.has(currId)) {
+        visited.add(currId);
+        const folder = folders.find(f => f.id === currId);
+        if (!folder) break;
+        path.unshift(folder);
+        currId = folder.parent_id;
+      }
+      return path;
+    };
+
+    const crumbs = getFolderBreadcrumbs(currentFolderId);
+
     return (
       <div>
+        {/* Search and Action Bar */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
           <div className="flex-1 w-full max-w-md relative">
             <Search className="w-4 h-4 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2" />
             <input 
               type="text" 
-              placeholder="Search datasets by name or source..." 
+              placeholder="Tìm kiếm dataset theo tên hoặc nguồn..." 
               value={datasetSearch}
               onChange={(e) => setDatasetSearch(e.target.value)}
               className="w-full bg-neutral-900 border border-neutral-800 rounded-lg pl-10 pr-4 py-2 text-sm text-neutral-300 outline-none focus:border-orange-500 transition-colors"
@@ -926,15 +1032,24 @@ export default function DataSourcesPage() {
           </div>
           <div className="flex items-center gap-2 w-full md:w-auto">
             <button
+              onClick={() => {
+                setNewFolderName("");
+                setShowCreateFolderModal(true);
+              }}
+              className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 px-4 py-2 rounded-lg font-medium transition-colors text-sm shadow-md cursor-pointer"
+            >
+              <FolderPlus className="w-4 h-4 text-orange-500" /> Thư mục mới
+            </button>
+            <button
               onClick={openExcelImportModal}
-              className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm shadow-md"
+              className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm shadow-md cursor-pointer"
             >
               <Upload className="w-4 h-4" /> Import Excel
             </button>
             <button 
               onClick={() => {
                 if (dataSources.length === 0) {
-                  alert("Please add a data source connection first.");
+                  Sonner.toast.warning("Vui lòng kết nối cơ sở dữ liệu trước.");
                   return;
                 }
                 setEditingDatasetId(null);
@@ -944,84 +1059,204 @@ export default function DataSourcesPage() {
                 setPreviewData(null);
                 setActiveTab("sql-editor");
               }}
-              className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm shadow-md"
+              className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm shadow-md cursor-pointer"
             >
-              <Plus className="w-4 h-4" /> Create Dataset
+              <Plus className="w-4 h-4" /> Tạo Dataset
             </button>
           </div>
         </div>
+
+        {/* Breadcrumbs (only if not searching) */}
+        {!isSearching && (
+          <div className="flex items-center gap-1.5 text-xs text-neutral-400 mb-6 bg-neutral-900/30 px-3 py-2 rounded-lg border border-neutral-800/50 w-fit">
+            <span 
+              className="hover:text-orange-500 cursor-pointer transition-colors font-medium" 
+              onClick={() => setCurrentFolderId(null)}
+            >
+              Root
+            </span>
+            {crumbs.map((crumb) => (
+              <span key={crumb.id} className="flex items-center gap-1.5">
+                <ChevronRight className="w-3 h-3 text-neutral-600" />
+                <span 
+                  className="hover:text-orange-500 cursor-pointer transition-colors font-medium last:text-neutral-200 last:pointer-events-none"
+                  onClick={() => setCurrentFolderId(crumb.id)}
+                >
+                  {crumb.name}
+                </span>
+              </span>
+            ))}
+          </div>
+        )}
 
         {datasetsLoading ? (
           <div className="flex justify-center py-12">
             <RefreshCw className="w-8 h-8 animate-spin text-orange-500" />
           </div>
-        ) : filteredDatasets.length === 0 ? (
-          <div className="text-center py-12 border border-dashed border-neutral-800 rounded-2xl bg-neutral-900/20">
-            <Table2 className="w-12 h-12 text-neutral-600 mx-auto mb-4" />
-            <h3 className="text-xl font-medium text-neutral-300">
-              {datasetSearch ? "No matching datasets" : "No datasets yet"}
-            </h3>
-            <p className="text-neutral-500 mt-2">
-              {datasetSearch ? "Try adjusting your search term." : "Write a query against your connections to define your first dataset."}
-            </p>
-          </div>
         ) : (
-          <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden shadow-sm">
-            <table className="w-full text-left border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-neutral-800 text-neutral-400 bg-neutral-900/50">
-                  <th className="py-3 px-4 font-medium">Dataset Name</th>
-                  <th className="py-3 px-4 font-medium">Data Source</th>
-                  <th className="py-3 px-4 font-medium">Columns</th>
-                  <th className="py-3 px-4 font-medium">Created At</th>
-                  <th className="py-3 px-4 font-medium text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredDatasets.map((dataset) => {
-                  const source = dataSources.find(ds => ds.id === dataset.data_source_id);
+          <div>
+            {/* 1. Folders Grid (only when not searching) */}
+            {!isSearching && currentSubfolders.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-6 select-none">
+                {currentSubfolders.map((folder) => {
+                  const subCount = folders.filter(f => f.parent_id === folder.id).length;
+                  const dsCount = datasets.filter(d => d.folder_id === folder.id).length;
                   return (
-                    <tr key={dataset.id} className="border-b border-neutral-800/50 last:border-0 hover:bg-neutral-850/10">
-                      <td className="py-3.5 px-4 font-medium text-neutral-50">{dataset.name}</td>
-                      <td className="py-3.5 px-4 text-neutral-400">{source?.name || "Unknown Source"}</td>
-                      <td className="py-3.5 px-4 text-neutral-400">
-                        <span className="bg-neutral-850 border border-neutral-800 px-2 py-0.5 rounded text-xs text-neutral-300">
-                          {dataset.columns_schema?.length || 0} columns
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-4 text-neutral-500 text-xs">
-                        {new Date(dataset.created_at).toLocaleDateString()}
-                      </td>
-                      <td className="py-3.5 px-4 text-right">
-                        <div className="flex justify-end gap-2">
-                          <button 
-                            onClick={() => handlePreviewDataset(dataset.id)}
-                            className="flex items-center gap-1 bg-orange-600 hover:bg-orange-700 text-white px-2.5 py-1 rounded transition-colors text-xs"
-                            title="Preview data"
-                          >
-                            <Eye className="w-3.5 h-3.5" /> Preview
-                          </button>
-                          <button 
-                            onClick={() => handleEditDataset(dataset)}
-                            className="flex items-center gap-1 bg-orange-600 hover:bg-orange-700 text-white px-2.5 py-1 rounded transition-colors text-xs"
-                            title="Edit dataset"
-                          >
-                            <Edit className="w-3.5 h-3.5" /> Edit
-                          </button>
-                          <button 
-                            onClick={() => handleDeleteDataset(dataset.id)}
-                            className="bg-neutral-800 hover:bg-red-950/30 text-neutral-400 hover:text-red-400 p-1.5 rounded transition-colors"
-                            title="Delete"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                    <div 
+                      key={folder.id} 
+                      className="group relative flex items-center justify-between p-4 bg-neutral-900 border border-neutral-800 rounded-xl hover:border-orange-500/50 hover:bg-neutral-850/20 transition-all cursor-pointer"
+                      onClick={() => {
+                        setCurrentFolderId(folder.id);
+                        setDatasetsPage(1);
+                      }}
+                    >
+                      <div className="flex items-center gap-3 overflow-hidden">
+                        <Folder className="w-8 h-8 text-orange-500 shrink-0" />
+                        <div className="overflow-hidden font-sans">
+                          <h4 className="font-medium text-neutral-200 group-hover:text-orange-500 transition-colors truncate">{folder.name}</h4>
+                          <p className="text-[11px] text-neutral-500 truncate mt-0.5">
+                            {subCount > 0 ? `${subCount} thư mục` : ""}
+                            {subCount > 0 && dsCount > 0 ? ", " : ""}
+                            {dsCount > 0 ? `${dsCount} dataset` : ""}
+                            {subCount === 0 && dsCount === 0 ? "Trống" : ""}
+                          </p>
                         </div>
-                      </td>
-                    </tr>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteFolder(folder.id);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 bg-neutral-800 hover:bg-red-950/30 text-neutral-400 hover:text-red-400 p-1.5 rounded transition-all cursor-pointer ml-2"
+                        title="Xóa thư mục"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   );
                 })}
-              </tbody>
-            </table>
+              </div>
+            )}
+
+            {/* 2. Datasets Table or Empty State */}
+            {activeDatasets.length === 0 ? (
+              // Empty State
+              (!isSearching && currentSubfolders.length > 0) ? null : (
+                <div className="text-center py-12 border border-dashed border-neutral-800 rounded-2xl bg-neutral-900/20">
+                  <Table2 className="w-12 h-12 text-neutral-600 mx-auto mb-4" />
+                  <h3 className="text-xl font-medium text-neutral-300">
+                    {isSearching ? "Không tìm thấy dataset nào khớp" : "Thư mục này trống"}
+                  </h3>
+                  <p className="text-neutral-500 mt-2 text-sm">
+                    {isSearching ? "Hãy thử tìm kiếm với từ khóa khác." : "Hãy tạo thêm thư mục con hoặc thêm dataset mới vào thư mục này."}
+                  </p>
+                </div>
+              )
+            ) : (
+              // Datasets Table
+              <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden shadow-sm">
+                <table className="w-full text-left border-collapse text-sm">
+                  <thead>
+                    <tr className="border-b border-neutral-800 text-neutral-400 bg-neutral-900/50">
+                      <th className="py-3 px-4 font-medium">Tên Dataset</th>
+                      <th className="py-3 px-4 font-medium">Nguồn dữ liệu</th>
+                      {isSearching && <th className="py-3 px-4 font-medium">Thư mục</th>}
+                      <th className="py-3 px-4 font-medium">Cột dữ liệu</th>
+                      <th className="py-3 px-4 font-medium">Ngày tạo</th>
+                      <th className="py-3 px-4 font-medium text-right">Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedDatasets.map((dataset) => {
+                      const source = dataSources.find(ds => ds.id === dataset.data_source_id);
+                      return (
+                        <tr key={dataset.id} className="border-b border-neutral-800/50 last:border-0 hover:bg-neutral-850/10">
+                          <td className="py-3.5 px-4 font-medium text-neutral-50">{dataset.name}</td>
+                          <td className="py-3.5 px-4 text-neutral-400">{source?.name || "Unknown Source"}</td>
+                          {isSearching && (
+                            <td className="py-3.5 px-4 text-neutral-400 font-mono text-xs">
+                              {dataset.folder_path || "general"}
+                            </td>
+                          )}
+                          <td className="py-3.5 px-4 text-neutral-400">
+                            <span className="bg-neutral-850 border border-neutral-800 px-2 py-0.5 rounded text-xs text-neutral-300">
+                              {dataset.columns_schema?.length || 0} cột
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4 text-neutral-550 text-xs">
+                            {new Date(dataset.created_at).toLocaleDateString()}
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            <div className="flex justify-end gap-2">
+                              <button 
+                                onClick={() => handlePreviewDataset(dataset)}
+                                className="flex items-center gap-1 bg-orange-600 hover:bg-orange-700 text-white px-2.5 py-1 rounded transition-colors text-xs shadow-sm cursor-pointer"
+                                title="Xem trước dữ liệu"
+                              >
+                                <Eye className="w-3.5 h-3.5" /> Xem
+                              </button>
+                              <button 
+                                onClick={() => handleEditDataset(dataset)}
+                                className="flex items-center gap-1 bg-orange-600 hover:bg-orange-700 text-white px-2.5 py-1 rounded transition-colors text-xs shadow-sm cursor-pointer"
+                                title="Sửa truy vấn"
+                              >
+                                <Edit className="w-3.5 h-3.5" /> Sửa
+                              </button>
+                              <button 
+                                onClick={() => {
+                                  setMovingDataset(dataset);
+                                  setTargetFolderId(dataset.folder_id || "root");
+                                }}
+                                className="flex items-center gap-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 px-2.5 py-1 rounded transition-colors text-xs shadow-sm cursor-pointer"
+                                title="Di chuyển thư mục"
+                              >
+                                <Move className="w-3.5 h-3.5 text-orange-500" /> Di chuyển
+                              </button>
+                              <button 
+                                onClick={() => handleDeleteDataset(dataset.id)}
+                                className="bg-neutral-800 hover:bg-red-950/30 text-neutral-400 hover:text-red-400 p-1.5 rounded transition-colors cursor-pointer"
+                                title="Xóa dataset"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+
+                {/* Pagination Controls */}
+                {totalDatasetsPages > 1 && (
+                  <div className="flex flex-col sm:flex-row justify-between items-center px-6 py-4 border-t border-neutral-800 bg-neutral-900/50 gap-4 select-none">
+                    <span className="text-xs text-neutral-550 font-medium">
+                      Hiển thị <span className="text-neutral-300">{(currentDatasetsPage - 1) * DATASETS_PAGE_SIZE + 1}</span> - <span className="text-neutral-300">{Math.min(currentDatasetsPage * DATASETS_PAGE_SIZE, totalDatasets)}</span> trong số <span className="text-neutral-300">{totalDatasets}</span> dataset
+                    </span>
+                    
+                    <div className="flex items-center gap-3 bg-neutral-955 border border-neutral-800 rounded-lg px-2 py-1">
+                      <button
+                        onClick={() => setDatasetsPage(prev => Math.max(1, prev - 1))}
+                        disabled={currentDatasetsPage === 1}
+                        className="p-1 hover:bg-neutral-800 disabled:opacity-30 disabled:hover:bg-transparent rounded text-neutral-450 hover:text-orange-500 transition-all cursor-pointer"
+                      >
+                        <ChevronLeft className="w-4.5 h-4.5" />
+                      </button>
+                      <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-tighter whitespace-nowrap">
+                        Trang <span className="text-orange-500">{currentDatasetsPage}</span> / {totalDatasetsPages}
+                      </span>
+                      <button
+                        onClick={() => setDatasetsPage(prev => Math.min(totalDatasetsPages, prev + 1))}
+                        disabled={currentDatasetsPage === totalDatasetsPages}
+                        className="p-1 hover:bg-neutral-800 disabled:opacity-30 disabled:hover:bg-transparent rounded text-neutral-455 hover:text-orange-500 transition-all cursor-pointer"
+                      >
+                        <ChevronRight className="w-4.5 h-4.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1065,7 +1300,7 @@ export default function DataSourcesPage() {
 
     return (
       <div className="flex-1 flex flex-col min-h-0">
-        <div className="flex gap-4 flex-1 min-h-0 select-none relative" style={{ height: "calc(100vh - 240px)" }}>
+        <div className="flex gap-4 flex-1 min-h-0 select-none relative" style={isPreviewMode ? { height: "100%" } : { height: "calc(100vh - 240px)" }}>
           {/* Database Explorer Panel */}
           <div 
             id="database-explorer"
@@ -1143,7 +1378,7 @@ export default function DataSourcesPage() {
               </div>
             </div>
             
-            <div className="flex-1 overflow-y-auto p-4 select-none bg-neutral-950">
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 select-none bg-neutral-950">
               <h4 className="text-xs text-neutral-500 font-medium mb-3 uppercase tracking-wider flex items-center gap-2">
                 <Columns className="w-3.5 h-3.5" /> Columns
               </h4>
@@ -1181,7 +1416,7 @@ export default function DataSourcesPage() {
           />
           
           {/* SQL Editor & Results Preview */}
-          <div className="flex-1 flex flex-col gap-6 min-w-0 min-h-0">
+          <div className="flex-1 flex flex-col gap-6 min-w-0 min-h-0 select-text">
             {/* SQL Editor */}
             <div className="h-[300px] shrink-0 bg-neutral-900 border border-neutral-800 rounded-xl p-4 flex flex-col">
               <div className="flex justify-between items-center mb-2">
@@ -1230,46 +1465,6 @@ export default function DataSourcesPage() {
                   >
                     <Save className="w-4 h-4" /> Save Dataset
                   </button>
-
-                  {/* Export Dropdown */}
-                  <div className="relative" ref={exportRef}>
-                    <button 
-                      onClick={() => setShowExportDropdown(!showExportDropdown)}
-                      disabled={!previewData || exportLoading}
-                      className="flex items-center gap-2 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 text-neutral-200 px-3 py-1.5 rounded text-sm font-medium transition-colors border border-neutral-700"
-                    >
-                      {exportLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                      Export
-                    </button>
-                    {showExportDropdown && (
-                      <div className="absolute right-0 mt-2 w-40 bg-neutral-900 border border-neutral-800 rounded-lg shadow-xl z-50 overflow-hidden py-1">
-                        <button 
-                          onClick={() => handleExport('excel')}
-                          className="w-full flex items-center gap-2 px-4 py-2 text-sm text-neutral-300 hover:bg-orange-600 hover:text-white transition-colors"
-                        >
-                          <FileSpreadsheet className="w-4 h-4" /> Excel (.xlsx)
-                        </button>
-                        <button 
-                          onClick={() => handleExport('csv')}
-                          className="w-full flex items-center gap-2 px-4 py-2 text-sm text-neutral-300 hover:bg-orange-600 hover:text-white transition-colors"
-                        >
-                          <FileCode className="w-4 h-4" /> CSV (.csv)
-                        </button>
-                        <button 
-                          onClick={() => handleExport('json')}
-                          className="w-full flex items-center gap-2 px-4 py-2 text-sm text-neutral-300 hover:bg-orange-600 hover:text-white transition-colors"
-                        >
-                          <FileJson className="w-4 h-4" /> JSON (.json)
-                        </button>
-                        <button 
-                          onClick={() => handleExport('txt')}
-                          className="w-full flex items-center gap-2 px-4 py-2 text-sm text-neutral-300 hover:bg-orange-600 hover:text-white transition-colors"
-                        >
-                          <FileText className="w-4 h-4" /> Text (.txt)
-                        </button>
-                      </div>
-                    )}
-                  </div>
                 </div>
               </div>
               <textarea
@@ -1347,7 +1542,7 @@ export default function DataSourcesPage() {
                   </div>
                 </div>
               </div>
-              <div className="flex-1 bg-neutral-950 border border-neutral-800 rounded p-4 overflow-x-auto overflow-y-auto">
+              <div className="flex-1 min-h-0 bg-neutral-950 border border-neutral-800 rounded p-4 overflow-x-auto overflow-y-auto select-text">
                 {queryError && <div className="text-red-400 text-sm mb-4">{queryError}</div>}
                 {previewData ? (
                   <div style={{ zoom: previewZoom / 100 }}>
@@ -1399,41 +1594,46 @@ export default function DataSourcesPage() {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-50 p-8 flex flex-col">
-      <div className="max-w-7xl mx-auto w-full flex-1 flex flex-col">
+    <div 
+      className={`${isPreviewMode ? 'h-screen overflow-hidden p-2' : 'min-h-screen p-8'} bg-neutral-950 text-neutral-50 flex flex-col`}
+      style={isPreviewMode ? { zoom: 0.8 } : undefined}
+    >
+      <div className={`${isPreviewMode ? 'max-w-full h-full min-h-0' : 'max-w-7xl'} mx-auto w-full flex-1 flex flex-col`}>
         {/* Tab switch bar at the very top */}
-        <div className="flex border-b border-neutral-800 mb-6 gap-2 shrink-0">
-          <button 
-            onClick={() => setActiveTab("sql-editor")}
-            className={`pb-3 px-3 py-2 rounded-t-lg font-semibold text-sm border-b-2 transition-colors ${
-              activeTab === "sql-editor" 
-                ? "border-orange-500 bg-neutral-900 text-neutral-50" 
-                : "border-transparent text-neutral-400 hover:text-neutral-50 hover:bg-neutral-900/50"
-            }`}
-          >
-            SQL Query Editor
-          </button>
-          <button 
-            onClick={() => setActiveTab("datasets")}
-            className={`pb-3 px-3 py-2 rounded-t-lg font-semibold text-sm border-b-2 transition-colors ${
-              activeTab === "datasets" 
-                ? "border-orange-500 bg-neutral-900 text-neutral-50" 
-                : "border-transparent text-neutral-400 hover:text-neutral-50 hover:bg-neutral-900/50"
-            }`}
-          >
-            Saved Datasets
-          </button>
-          <button 
-            onClick={() => setActiveTab("connections")}
-            className={`pb-3 px-3 py-2 rounded-t-lg font-semibold text-sm border-b-2 transition-colors ${
-              activeTab === "connections" 
-                ? "border-orange-500 bg-neutral-900 text-neutral-50" 
-                : "border-transparent text-neutral-400 hover:text-neutral-50 hover:bg-neutral-900/50"
-            }`}
-          >
-            Database Connections
-          </button>
-        </div>
+        {!isPreviewMode && (
+          <div className="flex border-b border-neutral-800 mb-6 gap-2 shrink-0">
+            <button 
+              onClick={() => setActiveTab("sql-editor")}
+              className={`pb-3 px-3 py-2 rounded-t-lg font-semibold text-sm border-b-2 transition-colors ${
+                activeTab === "sql-editor" 
+                  ? "border-orange-500 bg-neutral-900 text-neutral-50" 
+                  : "border-transparent text-neutral-400 hover:text-neutral-50 hover:bg-neutral-900/50"
+              }`}
+            >
+              SQL Query Editor
+            </button>
+            <button 
+              onClick={() => setActiveTab("datasets")}
+              className={`pb-3 px-3 py-2 rounded-t-lg font-semibold text-sm border-b-2 transition-colors ${
+                activeTab === "datasets" 
+                  ? "border-orange-500 bg-neutral-900 text-neutral-50" 
+                  : "border-transparent text-neutral-400 hover:text-neutral-50 hover:bg-neutral-900/50"
+              }`}
+            >
+              Saved Datasets
+            </button>
+            <button 
+              onClick={() => setActiveTab("connections")}
+              className={`pb-3 px-3 py-2 rounded-t-lg font-semibold text-sm border-b-2 transition-colors ${
+                activeTab === "connections" 
+                  ? "border-orange-500 bg-neutral-900 text-neutral-50" 
+                  : "border-transparent text-neutral-400 hover:text-neutral-50 hover:bg-neutral-900/50"
+              }`}
+            >
+              Database Connections
+            </button>
+          </div>
+        )}
 
         {/* Dynamic Content Views */}
         <div className="flex-1 flex flex-col min-h-0">
@@ -1454,36 +1654,9 @@ export default function DataSourcesPage() {
               </button>
             </div>
             <div className="p-4 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm text-neutral-400 mb-1">Database Type</label>
-                  <select 
-                    value={formData.type} 
-                    onChange={e => {
-                      const newType = e.target.value;
-                      let defaultPort = 5432;
-                      if (newType === 'clickhouse') defaultPort = 8123;
-                      else if (newType === 'mysql') defaultPort = 3306;
-                      else if (newType === 'sqlserver') defaultPort = 1433;
-                      
-                      setFormData({
-                        ...formData, 
-                        type: newType,
-                        port: defaultPort
-                      });
-                    }} 
-                    className="w-full bg-neutral-950 border border-neutral-800 rounded p-2 focus:border-orange-500 outline-none text-neutral-300"
-                  >
-                    <option value="postgres">PostgreSQL</option>
-                    <option value="clickhouse">ClickHouse</option>
-                    <option value="mysql">MySQL</option>
-                    <option value="sqlserver">SQL Server</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm text-neutral-400 mb-1">Name</label>
-                  <input type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} placeholder="My Database" className="w-full bg-neutral-950 border border-neutral-800 rounded p-2 focus:border-orange-500 outline-none text-neutral-300" />
-                </div>
+              <div>
+                <label className="block text-sm text-neutral-400 mb-1">Name</label>
+                <input type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full bg-neutral-950 border border-neutral-800 rounded p-2 focus:border-orange-500 outline-none text-neutral-300" />
               </div>
               <div className="grid grid-cols-3 gap-4">
                 <div className="col-span-2">
@@ -1552,7 +1725,7 @@ export default function DataSourcesPage() {
               </button>
             </div>
             
-            <div className="p-6 flex-1 overflow-auto bg-neutral-950">
+            <div className="p-6 flex-1 overflow-auto bg-neutral-950 select-text">
                {previewLoading ? (
                 <div className="h-48 flex justify-center items-center">
                   <RefreshCw className="w-8 h-8 animate-spin text-orange-500" />
@@ -1623,12 +1796,118 @@ export default function DataSourcesPage() {
               )}
             </div>
             
-            <div className="p-4 border-t border-neutral-800 flex justify-end bg-neutral-900/50">
+            <div className="p-4 border-t border-neutral-800 flex justify-between bg-neutral-900/50">
+              <button
+                onClick={() => {
+                  if (previewingDataset) {
+                    handleExportExcel(previewingDataset);
+                  }
+                }}
+                disabled={!previewDatasetData || previewDatasetData.rows.length === 0}
+                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-neutral-850 disabled:opacity-50 text-white px-4 py-2 rounded text-sm font-medium transition-colors cursor-pointer"
+              >
+                <FileSpreadsheet className="w-4 h-4" /> Xuất Excel (Toàn bộ)
+              </button>
               <button 
                 onClick={() => setShowPreviewModal(false)}
-                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-sm transition-colors text-neutral-300"
+                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-sm transition-colors text-neutral-300 cursor-pointer"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create Folder Modal */}
+      {showCreateFolderModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-xl w-full max-w-md overflow-hidden shadow-lg font-sans">
+            <div className="flex justify-between items-center p-4 border-b border-neutral-800 bg-neutral-900/50">
+              <h3 className="font-semibold text-base flex items-center gap-2 text-neutral-100">
+                <FolderPlus className="w-5 h-5 text-orange-500" /> Tạo thư mục mới
+              </h3>
+              <button onClick={() => setShowCreateFolderModal(false)} className="text-neutral-400 hover:text-neutral-50 cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs text-neutral-450 mb-1 uppercase tracking-wider font-semibold">Tên thư mục</label>
+                <input 
+                  type="text" 
+                  value={newFolderName} 
+                  onChange={e => setNewFolderName(e.target.value)} 
+                  placeholder="Nhập tên thư mục..."
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded p-2 focus:border-orange-500 outline-none text-neutral-200 text-sm" 
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      handleCreateFolder();
+                    }
+                  }}
+                />
+              </div>
+            </div>
+            <div className="p-4 border-t border-neutral-800 flex justify-end bg-neutral-900/50 gap-2">
+              <button 
+                onClick={() => setShowCreateFolderModal(false)} 
+                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-sm transition-colors text-neutral-300 cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button 
+                onClick={handleCreateFolder} 
+                className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded text-sm font-medium transition-colors cursor-pointer"
+              >
+                Tạo thư mục
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Move Dataset Modal */}
+      {movingDataset && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-xl w-full max-w-md overflow-hidden shadow-lg font-sans">
+            <div className="flex justify-between items-center p-4 border-b border-neutral-800 bg-neutral-900/50">
+              <h3 className="font-semibold text-base flex items-center gap-2 text-neutral-100">
+                <Move className="w-5 h-5 text-orange-500" /> Di chuyển Dataset
+              </h3>
+              <button onClick={() => setMovingDataset(null)} className="text-neutral-400 hover:text-neutral-50 cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-neutral-400">
+                Di chuyển dataset <span className="font-semibold text-neutral-200">{movingDataset.name}</span> đến thư mục:
+              </p>
+              <div>
+                <label className="block text-xs text-neutral-450 mb-1 uppercase tracking-wider font-semibold">Thư mục đích</label>
+                <select 
+                  value={targetFolderId} 
+                  onChange={e => setTargetFolderId(e.target.value)} 
+                  className="w-full bg-neutral-950 border border-neutral-800 text-neutral-300 text-sm rounded p-2 outline-none focus:border-orange-500 cursor-pointer"
+                >
+                  <option value="root">Root / Chưa phân loại (General)</option>
+                  {getIndentedFolders().map((f) => (
+                    <option key={f.id} value={f.id}>{f.label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="p-4 border-t border-neutral-800 flex justify-end bg-neutral-900/50 gap-2">
+              <button 
+                onClick={() => setMovingDataset(null)} 
+                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded text-sm transition-colors text-neutral-300 cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button 
+                onClick={handleMoveDataset} 
+                className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded text-sm font-medium transition-colors cursor-pointer"
+              >
+                Di chuyển
               </button>
             </div>
           </div>
