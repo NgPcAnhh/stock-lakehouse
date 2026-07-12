@@ -56,16 +56,13 @@ app.add_middleware(TimeoutMiddleware, timeout_seconds=30.0)
 app.add_middleware(DBSemaphoreMiddleware, max_concurrent=50)
 
 # CORS middleware
-cors_params = {
-    "allow_origins": settings.allowed_origins_list,
-    "allow_credentials": True,
-    "allow_methods": ["*"],
-    "allow_headers": ["*"],
-}
-if settings.CORS_ALLOW_ORIGIN_REGEX:
-    cors_params["allow_origin_regex"] = settings.CORS_ALLOW_ORIGIN_REGEX
-
-app.add_middleware(CORSMiddleware, **cors_params)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.allowed_origins_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Include BI routers
 from app.modules.bi.data_sources.router import router as data_sources_router

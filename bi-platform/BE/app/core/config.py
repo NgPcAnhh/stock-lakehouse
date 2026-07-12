@@ -10,12 +10,9 @@ class Settings(BaseSettings):
 
     APP_NAME: str = "StockPro Analysis System"
     APP_VERSION: str = "1.0.0"
-
-
     DEBUG: bool = False
     SECRET_KEY: str = "change-me-in-production"
-    ALLOWED_ORIGINS: str = "http://localhost:3000,https://stock-analytic-platform-git-main-ngpcanhhs-projects.vercel.app"
-    CORS_ALLOW_ORIGIN_REGEX: str | None = r"https://.*\.vercel\.app"
+    ALLOWED_ORIGINS: str = "http://localhost:3000"
 
     DATABASE_URL: str = os.getenv("DATABASE_URL")
     DATABASE_URL_SYNC: str | None = None
@@ -51,7 +48,7 @@ class Settings(BaseSettings):
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
     EMAIL_FROM: str = "noreply@stockpro.vn"
-    FRONTEND_URL: str = "https://stock-analytic-platform-git-main-ngpcanhhs-projects.vercel.app"
+    FRONTEND_URL: str = "http://localhost:3000"
 
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     OPENAI_EMBEDDING_DIMENSIONS: int = 1024

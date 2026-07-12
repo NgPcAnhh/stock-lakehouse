@@ -289,6 +289,36 @@ export default function AdminDashboardPage() {
                                         </CardContent>
                                     </Card>
 
+                                    {/* Kafka UI Card */}
+                                    <Card className="hover:border-primary/30 transition-all duration-300 group">
+                                        <CardContent className="p-6 flex flex-col justify-between h-full space-y-4">
+                                            <div className="space-y-3">
+                                                <div className="flex items-start justify-between">
+                                                    <div className="p-2.5 rounded-xl bg-gradient-to-br from-red-500/10 to-red-500/5 text-red-500 border border-red-500/20 group-hover:from-red-500/20">
+                                                        <Server className="h-6 w-6" />
+                                                    </div>
+                                                    <Badge variant="secondary" className="text-[10px] font-mono">Port 8081 (UI)</Badge>
+                                                </div>
+                                                <div>
+                                                    <h3 className="font-bold text-lg">Kafka UI</h3>
+                                                    <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
+                                                        Giao diện quản lý cụm Apache Kafka. Giúp theo dõi trực quan các Topics, Consumer Groups, Producers, Messages phục vụ cho luồng truyền tải dữ liệu thời gian thực (real-time stream).
+                                                    </p>
+                                                </div>
+                                                <div className="bg-muted/50 rounded-lg p-2.5 text-xs font-mono space-y-1">
+                                                    <div className="flex justify-between"><span className="text-muted-foreground">Bootstrap Servers:</span> <span className="font-semibold">kafka:9093</span></div>
+                                                    <div className="flex justify-between"><span className="text-muted-foreground">Brokers count:</span> <span className="font-semibold">1 (development)</span></div>
+                                                </div>
+                                            </div>
+                                            <Button 
+                                                onClick={() => window.open(`http://${hostname}:8081`, "_blank")} 
+                                                className="w-full mt-auto gap-2"
+                                                variant="outline"
+                                            >
+                                                Truy cập Kafka UI <ExternalLink className="h-3.5 w-3.5" />
+                                            </Button>
+                                        </CardContent>
+                                    </Card>
 
                                     {/* Apache Spark Card */}
                                     <Card className="hover:border-primary/30 transition-all duration-300 group">

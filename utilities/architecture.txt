@@ -1,45 +1,45 @@
 ========================================================================================================
-                                 SƠ ĐỒ TỔNG THỂ HẠ TẦNG BIG DATA ĐỀ XUẤT
-                                         (Luồng Batch qua Airflow)
+                                SƠ ĐỒ TỔNG THỂ HẠ TẦNG BIG DATA ĐỀ XUẤT
+                       (Tích hợp luồng Real-time Kafka và luồng Batch Airflow)
 ========================================================================================================
 
-                                                            [ LUỒNG BATCH: BCTC, Giá Daily, Vĩ mô ]
-                                                            +------------------------------------+
-                                                            |      APIs / VNStock / Web Scraping |
-                                                            +------------------------------------+
-                                                                              |
-                                                                              | (Crawl & Ingest định kỳ)
-                                                                              v
-                                                                       +--------------+
-                                                                       |   AIRFLOW    | (Chạy các DAG crawl
-                                                                       |  SCHEDULER   |  như bctc, price,...)
-                                                                       +--------------+
-                                                                              |
-                                                                              | (Ghi file thô)
-                                                                              v
-                                                               +------------------------------+
-                                                               |      MINIO RAW BUCKET        |
-                                                               |  (Lưu trữ file thô CSV/PQ)   |
-                                                               +------------------------------+
-                                                                              |
-                                                                              | (Đọc file & chuyển đổi)
-                                                                              v
-                                                               +------------------------------+
-                                                               |     AIRFLOW SYNC TASKS       |
-                                                               |  - Chuyển CSV -> PyIceberg   |
-                                                               |  - ClickHouse S3 Import      |
-                                                               +------------------------------+
-                                                                              |
-                                                                              | (Ghi đè/Nối tiếp dữ liệu)
-                                                                              v
-                                                               +------------------------------+
-                                                               |     CLICKHOUSE OLAP DB       |
-                                                               | - Lưu trữ tập trung để query |
-                                                               | - Engine: MergeTree          |
-                                                               +------------------------------+
-                                                                              |
-                                                                              v
-                                                                       +-----------------+
-                                                                       |   BI / USERS    |
-                                                                       +-----------------+
+    [ LUỒNG REAL-TIME: Dữ liệu giao dịch ]                  [ LUỒNG BATCH: BCTC, Giá Daily, Vĩ mô ]
+    +------------------------------------+                  +------------------------------------+
+    |         KAFKA TOPIC (Stream)       |                  |      APIs / VNStock / Web Scraping |
+    +------------------------------------+                  +------------------------------------+
+         |                            |                                       |
+         | (Consume 24/7)             | (Consume 24/7)                        | (Crawl & Ingest định kỳ)
+         v                            v                                       v
+  +--------------+             +--------------+                        +--------------+
+  |    PYTHON    |             |  CLICKHOUSE  |                        |   AIRFLOW    | (Chạy các DAG crawl
+  |   CONSUMER   |             | KAFKA ENGINE |                        |  SCHEDULER   |  như bctc, price,...)
+  | (PyIceberg)  |             | (Tích hợp)   |                        +--------------+
+  +--------------+             +--------------+                               |
+         |                            |                                       | (Ghi file thô)
+         |                            |                                       v
+         |                            |                        +------------------------------+
+         |                            |                        |      MINIO RAW BUCKET        |
+         |                            |                        |  (Lưu trữ file thô CSV/PQ)   |
+         |                            |                        +------------------------------+
+         |                            |                                       |
+         |                            |                                       | (Đọc file & chuyển đổi)
+         | (Ghi Iceberg Table)        |                                       v
+         v                            |                        +------------------------------+
+  +--------------+                    |                        |     AIRFLOW SYNC TASKS       |
+  |    MINIO     | <------------------+----------------------- |  - Chuyển CSV -> PyIceberg   |
+  |  ICEBERG-    | (Đồng bộ dữ liệu nóng/lịch sử)              |  - ClickHouse S3 Import      |
+  |  WAREHOUSE   |                                             +------------------------------+
+  +--------------+                                                            |
+         ^                                                                    | (Ghi đè/Nối tiếp dữ liệu)
+         |                                                                    v
+         | (Đọc phân tán On-demand)                                    +------------------------------+
+  +--------------+                                                     |     CLICKHOUSE OLAP DB       |
+  |    SPARK     |                                                     | - Lưu trữ tập trung để query |
+  |   CLUSTER    |                                                     | - Engine: MergeTree          |
+  |  (User/ML)   |                                                     +------------------------------+
+  +--------------+                                                                    |
+                                                                                      v
+                                                                               +-----------------+
+                                                                               |   BI / USERS    |
+                                                                               +-----------------+
 ========================================================================================================
