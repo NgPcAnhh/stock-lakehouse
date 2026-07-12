@@ -1,20 +1,28 @@
 name: Reset Branch to Commit
 on:
-  workflow_dispatch: # Kích hoạt bằng tay trên giao diện
+  workflow_dispatch:
 
 jobs:
   reset:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout hiện tại
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Reset to specific commit
+      - name: Ghi đè toàn bộ code bằng commit cũ
         run: |
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
-          git reset --hard c01973b18dfdb3ee0bf41e06fa65e9664539b7ea
-          git push origin main --force
+          
+          # Đưa trạng thái file về đúng commit mong muốn
+          git checkout c01973b18dfdb3ee0bf41e06fa65e9664539b7ea .
+          
+          # Kiểm tra nếu có thay đổi thì mới commit
+          if ! git diff --staged --quiet; then
+            git commit -m "Chính thức khôi phục toàn bộ code về commit c01973b"
+            git push origin main
+          else
+            echo "Không có thay đổi nào cần cập nhật."
+          fi
