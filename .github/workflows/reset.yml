@@ -17,7 +17,7 @@ jobs:
           git config --global user.email "action@github.com"
           
           # Đưa trạng thái file về đúng commit mong muốn
-          git checkout c01973b18dfdb3ee0bf41e06fa65e9664539b7ea .
+          git checkout c01973b141b07fef82e6bd1b963490f68d2b7c07 .
           
           # Kiểm tra nếu có thay đổi thì mới commit
           if ! git diff --staged --quiet; then
