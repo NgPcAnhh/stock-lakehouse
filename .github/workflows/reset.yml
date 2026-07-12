@@ -1,0 +1,20 @@
+name: Reset Branch to Commit
+on:
+  workflow_dispatch: # Kích hoạt bằng tay trên giao diện
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Reset to specific commit
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          git reset --hard c01973b18dfdb3ee0bf41e06fa65e9664539b7ea
+          git push origin main --force
