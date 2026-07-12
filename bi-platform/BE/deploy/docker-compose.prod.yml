@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: bi_api_backend
+    restart: always
+    ports:
+      - "127.0.0.1:8000:8000" # Chỉ cho phép localhost truy cập port 8000 (để Nginx làm proxy)
+    env_file:
+      - ../.env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DEBUG=false
+    # Giới hạn tài nguyên để tránh overload hệ thống trên t3.micro/t3.small
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1.5G
+        reservations:
+          memory: 256M

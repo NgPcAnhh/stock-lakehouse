@@ -138,34 +138,6 @@ function DarkModeSwitch({ value, onChange }: { value: boolean; onChange: (v: boo
         </button>
     );
 }
-
-function PriceBoardSwitch({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
-    return (
-        <button
-            role="switch"
-            aria-checked={value}
-            onClick={() => onChange(!value)}
-            className={cn(
-                "relative inline-flex h-7 w-14 items-center rounded-full transition-colors duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                value ? "bg-emerald-500" : "bg-muted-foreground/30"
-            )}
-        >
-            <span
-                className={cn(
-                    "inline-flex h-5 w-5 transform items-center justify-center rounded-full bg-white shadow-md transition-transform duration-300",
-                    value ? "translate-x-8" : "translate-x-1"
-                )}
-            >
-                {value ? (
-                    <Monitor className="size-3 text-emerald-500" />
-                ) : (
-                    <MonitorOff className="size-3 text-muted-foreground" />
-                )}
-            </span>
-        </button>
-    );
-}
-
 function AutoHideSidebarSwitch({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
     return (
         <button
@@ -751,7 +723,6 @@ function AddCustomMenuDialog({
 export default function SettingsPage() {
     const {
         darkMode, setDarkMode,
-        showPriceBoardPopup, setShowPriceBoardPopup,
         autoHideSidebar, setAutoHideSidebar,
         sidebarItems, moveSidebarItem, toggleSidebarItem, resetSidebarItems,
         addCustomSidebarItem, removeCustomSidebarItem,
@@ -1039,25 +1010,6 @@ export default function SettingsPage() {
                                 </Badge>
                             </div>
                             <DarkModeSwitch value={darkMode} onChange={setDarkMode} />
-                        </div>
-                    </Card>
-
-                    {/* Price Board Popup toggle */}
-                    <Card className="p-6">
-                        <div className="flex items-center justify-between gap-4">
-                            <div className="space-y-1.5">
-                                <div className="flex items-center gap-2">
-                                    {showPriceBoardPopup ? <Monitor className="size-4 text-emerald-500" /> : <MonitorOff className="size-4 text-muted-foreground" />}
-                                    <h3 className="font-semibold text-foreground">Bảng điện iframe</h3>
-                                </div>
-                                <p className="text-sm text-muted-foreground">
-                                    Bật tính năng hiển thị iframe bảng điện thu nhỏ trong giờ giao dịch từ thứ 2 đến thứ 6 (9h - 15h).
-                                </p>
-                                <Badge variant="outline" className="text-xs w-fit text-foreground">
-                                    {showPriceBoardPopup ? "Đang bật" : "Đang tắt"}
-                                </Badge>
-                            </div>
-                            <PriceBoardSwitch value={showPriceBoardPopup} onChange={setShowPriceBoardPopup} />
                         </div>
                     </Card>
 

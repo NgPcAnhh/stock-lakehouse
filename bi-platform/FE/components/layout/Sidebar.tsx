@@ -9,7 +9,6 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/AuthContext";
-import { useTracking } from "@/hooks/useTracking";
 import { useSettings, SIDEBAR_ICON_MAP } from "@/lib/SettingsContext";
 
 interface SidebarProps {
@@ -23,12 +22,9 @@ export function Sidebar({ className, collapsed, onToggle }: SidebarProps) {
     const searchParams = useSearchParams();
     const { sidebarItems } = useSettings();
     const { isAuthenticated, user, openAuthModal, logout } = useAuth();
-    const { trackSidebarClick } = useTracking(user?.id);
 
     // Auth Guard handle
     const handleNavigation = (e: React.MouseEvent<HTMLAnchorElement>, href: string, name: string) => {
-        // Ghi log click sidebar
-        trackSidebarClick(name, href);
 
         if (!isAuthenticated && href !== "/") {
             e.preventDefault();

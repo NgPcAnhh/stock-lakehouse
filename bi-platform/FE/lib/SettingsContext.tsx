@@ -81,8 +81,6 @@ function reconcileSidebarItems(savedItems: SidebarNavItem[]): SidebarNavItem[] {
 interface SettingsContextType {
     darkMode: boolean;
     setDarkMode: (v: boolean) => void;
-    showPriceBoardPopup: boolean;
-    setShowPriceBoardPopup: (v: boolean) => void;
     autoHideSidebar: boolean;
     setAutoHideSidebar: (v: boolean) => void;
     sidebarItems: SidebarNavItem[];
@@ -98,7 +96,6 @@ const SettingsContext = createContext<SettingsContextType | undefined>(undefined
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
     const [darkMode, setDarkModeState] = useState(false);
-    const [showPriceBoardPopup, setShowPriceBoardPopupState] = useState(true);
     const [autoHideSidebar, setAutoHideSidebarState] = useState(false);
     const [sidebarItems, setSidebarItemsState] = useState<SidebarNavItem[]>(DEFAULT_SIDEBAR_ITEMS);
     const [mounted, setMounted] = useState(false);
@@ -110,7 +107,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
             if (saved) {
                 const parsed = JSON.parse(saved);
                 if (typeof parsed.darkMode === "boolean") setDarkModeState(parsed.darkMode);
-                if (typeof parsed.showPriceBoardPopup === "boolean") setShowPriceBoardPopupState(parsed.showPriceBoardPopup);
                 if (typeof parsed.autoHideSidebar === "boolean") setAutoHideSidebarState(parsed.autoHideSidebar);
                 if (Array.isArray(parsed.sidebarItems)) {
                     setSidebarItemsState(reconcileSidebarItems(parsed.sidebarItems));
@@ -134,19 +130,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     };
 
     const setDarkMode = (v: boolean) => { setDarkModeState(v); persist({ darkMode: v }); };
-
-    const setShowPriceBoardPopup = (v: boolean) => {
-        setShowPriceBoardPopupState(v);
-        persist({ showPriceBoardPopup: v });
-        if (v) {
-            try {
-                // Khi bật lại bảng điện, reset các cờ cấu hình tắt của iframe
-                localStorage.removeItem("stockpro:price-board-popup:never-show");
-                localStorage.removeItem("stockpro:price-board-popup:hide-today");
-                sessionStorage.removeItem("stockpro:price-board-popup:session-closed");
-            } catch { /* ignore */ }
-        }
-    };
 
     const setAutoHideSidebar = (v: boolean) => {
         setAutoHideSidebarState(v);
@@ -208,8 +191,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
             value={{
                 darkMode,
                 setDarkMode,
-                showPriceBoardPopup,
-                setShowPriceBoardPopup,
                 autoHideSidebar,
                 setAutoHideSidebar,
                 sidebarItems,

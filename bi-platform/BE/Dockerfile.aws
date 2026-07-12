@@ -1,0 +1,30 @@
+FROM python:3.11-slim
+
+# Install system dependencies (NO redis-server — dùng AWS ElastiCache)
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    gcc \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy requirements trước để tận dụng Docker layer cache
+COPY requirements.txt .
+
+# Cài đặt Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy toàn bộ source code
+COPY . .
+
+EXPOSE 8000
+
+# Health check cho ALB Target Group
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/ || exit 1
+
+# Production: không --reload, dùng 2 workers (Fargate 0.5 vCPU)
+# Debug=false sẽ được set qua env var (Secrets Manager)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--log-level", "info"]
